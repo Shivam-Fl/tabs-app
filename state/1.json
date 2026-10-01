@@ -336,7 +336,7 @@
           "Recording expenses against a placeholder — piece 4 makes it possible.",
           "The owner-only controls on the group itself (rename, remove, archive) — piece 2."
         ],
-        "issue": null
+        "issue": 5
       },
       {
         "title": "Record an expense: who paid, and how it splits",
@@ -567,6 +567,7 @@
   },
   "children": [
     3,
-    4
+    4,
+    5
   ]
 }
