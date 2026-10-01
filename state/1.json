@@ -306,7 +306,7 @@
           "The balance precondition on leaving or removing. A member's balance is zero until expenses exist, so the check could not be exercised here; it and TR-16 land with the balances in piece 6.",
           "The two summary figures on the home screen — piece 6."
         ],
-        "issue": null
+        "issue": 4
       },
       {
         "title": "Invite people to a group, and let them claim a name before they sign up",
@@ -566,6 +566,7 @@
     "deferred": []
   },
   "children": [
-    3
+    3,
+    4
   ]
 }
