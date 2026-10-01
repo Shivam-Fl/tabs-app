@@ -110,7 +110,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": null,
+  "resume_at": "project",
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -119,7 +119,7 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": null,
+  "stopped_at": "project",
   "dispatched_stage": "project",
   "failure_packet": {
     "issue": 1,
