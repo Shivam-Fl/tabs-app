@@ -1,21 +1,17 @@
 {
   "issue": 1,
   "pr": null,
-  "state": "needs-human",
+  "state": "planning",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
   "attempts": {
-    "plan": 1,
+    "plan": 0,
     "ci": 0,
     "review": 0,
     "qa": 0
   },
-  "attempt_run": {
-    "counter": "plan",
-    "n": 1,
-    "run": "36930120414"
-  },
+  "attempt_run": null,
   "halted": null,
   "pending": null,
   "work_order": null,
@@ -40,7 +36,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T21:38:57.002Z",
-  "updated_at": "2026-10-01T21:43:48.263Z",
+  "updated_at": "2026-10-01T21:46:31.714Z",
   "history": [
     {
       "at": "2026-10-01T21:38:59.967Z",
@@ -71,6 +67,21 @@
       "at": "2026-10-01T21:43:48.263Z",
       "agent": "self-heal",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-10-01T21:46:31.714Z",
+      "agent": "human",
+      "action": "lock released"
+    },
+    {
+      "at": "2026-10-01T21:46:31.714Z",
+      "agent": "human",
+      "action": "budget reset (was {\"plan\":1,\"ci\":0,\"review\":0,\"qa\":0})"
+    },
+    {
+      "at": "2026-10-01T21:46:31.714Z",
+      "agent": "human",
+      "action": "-> planning"
     }
   ],
   "resume_at": "project",
