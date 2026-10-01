@@ -502,7 +502,7 @@
           "Writing activity entries: every mutation has written its own since piece 2, and this piece only reads them.",
           "Charts, spending reports and email notifications — not in this version."
         ],
-        "issue": null
+        "issue": 10
       },
       {
         "title": "Seed Tabs with a fixed set of users, groups and expenses",
@@ -572,6 +572,7 @@
     6,
     7,
     8,
-    9
+    9,
+    10
   ]
 }
