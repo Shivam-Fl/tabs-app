@@ -17,8 +17,11 @@
   "work_order": null,
   "touch_paths": [],
   "acceptance": [],
-  "planned_route": [],
-  "on_complete": null,
+  "planned_route": [
+    "project",
+    "maintainer"
+  ],
+  "on_complete": "comment-only",
   "artifacts": {},
   "failure_history": [],
   "review_history": [],
@@ -30,6 +33,20 @@
       "at": "2026-10-01T21:38:59.967Z",
       "agent": "intake",
       "action": "-> planning"
+    },
+    {
+      "at": "2026-10-01T21:39:21.193Z",
+      "agent": "router",
+      "action": "route project -> maintainer (greenfield-spec, confidence 90)"
     }
-  ]
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "epic",
+    "confidence": 90,
+    "matched_rule": "greenfield-spec",
+    "gates": {},
+    "councils": {},
+    "decided_at": "2026-10-01T21:39:21.193Z"
+  }
 }
