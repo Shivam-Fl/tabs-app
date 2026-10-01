@@ -407,7 +407,7 @@
           "The activity feed screens that render these entries — piece 8, which is why this piece's entries are unrendered until then.",
           "Any change to a stored expense's balance beyond the difference its own replacement makes."
         ],
-        "issue": null
+        "issue": 7
       },
       {
         "title": "See who owes whom, in as few payments as possible",
@@ -569,6 +569,7 @@
     3,
     4,
     5,
-    6
+    6,
+    7
   ]
 }
