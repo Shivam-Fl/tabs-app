@@ -529,7 +529,7 @@
           "Any fixture the pieces above do not build yet.",
           "Changing qa_auth.mode in .sdlc/config.yml, which is a reserved path and a person's decision."
         ],
-        "issue": null
+        "issue": 11
       },
       {
         "title": "Run Tabs and deploy it to Vercel from the README alone",
@@ -573,6 +573,7 @@
     7,
     8,
     9,
-    10
+    10,
+    11
   ]
 }
