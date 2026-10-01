@@ -1,25 +1,112 @@
-<!-- sdlc:stub -->
-<!-- Seeded by a scan that found no project to scan. The project planner replaces this file
-     wholesale, once, before the first ticket is planned. Delete this marker by hand only if
-     you have written the real thing yourself. -->
-
 # Project
 
-Seeded by `sdlc install` from a scan. **Correct it** — an agent reads this before planning,
-and a wrong entry here steers every ticket wrong.
+Written by the project planner and approved by a human, once, before the first ticket was
+planned. Every agent reads this before deciding anything — correct it here rather than
+arguing with it in a ticket.
+
+## What this is
+Tabs is a shared-expense web application for friends, flatmates and trips. A group records expenses — who paid (one person or several, in parts), what it was for, and how it splits — and the app derives, from that record alone, every member's net balance, who owes whom, and the smallest set of transfers that settles the group. Members can be invited by link, added by name before they have accounts, and removed or leave when their balance is zero. It is a server-rendered Next.js application on one Postgres database: in-process PGlite when no DATABASE_URL is set, so development, the test suite, CI and browser QA need nothing installed, and Neon when one is, so nothing a user saves is lost on a redeploy. Money is integer minor units from the database to the screen, and every read and write of a group's data is authorised on the server against the session that is asking.
 
 ## Stack
-unknown · 3 tracked files
+TypeScript 5.9 in strict mode on Node 22; one Next.js 16.3 App Router application (React 19.3, Turbopack) deployed to Vercel; Drizzle ORM 0.45 over PostgreSQL 16 — Neon via @neondatabase/serverless 1.2 (Pool/WebSocket driver, drizzle-orm/neon-serverless) when DATABASE_URL is set, in-process @electric-sql/pglite 0.5.8 (drizzle-orm/pglite) when it is not; Zod 4.6 for every input that crosses a boundary; Tailwind CSS 4.3 (@theme tokens) for all styling; Vitest 5 with @testing-library/react for unit and integration tests. No other ORM, no client state library, no auth framework, no native addons, no e2e runner.
 
-## Top-level layout
-- `docs/`
+Most of this stack is the spec's own, so the decisions left open were the ones below, and each was decided against the pipeline rather than against taste. Drizzle over Prisma: ci-verify installs dependencies with --ignore-scripts so no dependency can run code before the checks that judge the PR, and @prisma/engines downloads its binaries from a postinstall hook — with that hook skipped the client is unusable unless verify.prepare is edited, and verify.prepare lives in .sdlc/config.yml, a path no agent may touch. Drizzle is TypeScript source with no install step, and it ships a first-party driver for both backends, so the same schema and the same generated migrations run on PGlite locally and on Neon in production. Pinning TypeScript 5.9 rather than the current 7.0.2 for the same reason one version earlier: typescript-eslint's declared peer range is >=4.8.4 <6.1.0, so 7.x makes the lint step uninstallable rather than merely noisy. Hand-rolled sessions rather than an auth framework, because the whole requirement is an opaque token in an httpOnly cookie plus a row in a table, and every framework brings a configuration surface, a callback model and a version history that the pipeline's agents would each have to learn. Server Components and Server Actions rather than a REST client, because every screen here is a read the server can do directly and a write that a form can post; an API layer would be a second description of the same domain that could disagree with the first. And no Playwright: the QA stage already drives a real browser against a real build, and a second browser harness in CI would double the slowest thing in the pipeline to re-run a suite that would mostly re-test the app.
+
+Rejected:
+- **Prisma ORM** — @prisma/engines@6 declares a postinstall hook that fetches the platform binaries. ci-verify installs with --ignore-scripts, so the client never generates; the documented workaround is a verify.prepare entry in .sdlc/config.yml, which is a reserved path no ticket may edit. Drizzle needs no install step and has native PGlite and Neon drivers.
+- **Auth.js / NextAuth v5** — The requirement is an opaque session token in an httpOnly cookie and a sessions table. A framework adds a provider/secret/callback configuration, its own migration story and a version history that moves, none of which the product uses. A session table plus requireUser() is about eighty lines and is the same code the tests read.
+- **REST API plus fetch and a client cache (React Query, Redux, Zustand)** — Every screen is a server read and every write is a form post, so a client cache would hold a second copy of state the server already owns, invalidated by hand. Server Components read the database directly and Server Actions mutate it, which removes the client-cache invalidation class of bug entirely.
+- **tRPC or a typed-RPC layer** — It adds a codegen step and a second type system to learn for a product with about a dozen server actions. Zod schemas shared between the action and its test give the same end-to-end typing with one file instead of a toolchain.
+- **Playwright for end-to-end tests in CI** — The QA stage already boots the real application and drives a real browser, which is the same coverage with the fixtures already in place. verify.e2e is empty in .sdlc/config.yml, and a browser harness in the 45-minute CI job is the most likely thing to make every pull request flaky.
+- **A component library (shadcn/ui, Radix, Mantine)** — It brings a large dependency tree and its own visual language, and the spec asks for one consistent product with tokens every screen obeys. About ten primitives in src/components/ui, written against the theme tokens, cover everything Tabs renders.
+- **Argon2 for password hashing (argon2, @node-rs/argon2)** — Both are native addons, which is the one dependency class this CI cannot install safely and this platform must bundle. OWASP ranks scrypt immediately behind Argon2id and Node ships it in crypto, so the requirement — a slow, salted hash — is met with no dependency and no install step at all.
+
+## Architecture
+One Next.js application, one database, one boundary. Reads are React Server Components that call Drizzle directly and render; there is no HTTP hop between a page and the data it shows. Writes are Server Actions that validate with Zod, authorise against the session, and run their writes inside one transaction. The database is chosen once, at import time, from the presence of DATABASE_URL: Neon when it is set, a single in-process PGlite instance when it is not, with both wrapped in the same Drizzle instance type so no call site knows which one it has. Authorisation is part of the query rather than a check that can be forgotten — every read of group data is a join against the caller's membership, so a missing membership yields no rows rather than a bug. Two Route Handlers exist and no more: GET /api/health, which the readiness poll and any uptime check use, and POST /api/dev/seed, which is how fixtures get into a database that lives inside the app's own process. The browser never speaks to the database and never speaks to a third party: every request is same-origin, which is also what .sdlc/config.yml's api_allowlist of localhost-only is built for.
+
+### Modules
+- `src/db/schema.ts` — The Drizzle schema: every table, column, constraint and index. The single description of the data model.
+- `src/db/client.ts` — Chooses Neon or PGlite from DATABASE_URL and exports one Drizzle instance, holding PGlite as a process singleton.
+- `src/db/migrate.ts` — Applies the generated migration list to whichever database is configured, behind a lock, and is safe to call on every boot.
+- `drizzle/` — The generated SQL migration files — the only schema history, applied identically to PGlite and Neon.
+- `src/lib/auth.ts` — Password hashing, session creation and revocation, sign-in rate limiting, and the requireUser() every page and action calls.
+- `src/lib/access.ts` — The authorisation boundary: membership-scoped queries, requireMember(), and the owner-only checks, so no call site can read a group by id alone.
+- `src/lib/money.ts` — Parsing, formatting and splitting amounts in integer minor units. The only file in which arithmetic on money happens.
+- `src/lib/balances.ts` — Per-member net balances and the simplified-debt algorithm, computed from stored shares and payer amounts.
+- `src/lib/activity.ts` — The only writer of the feed, always inside the caller's transaction so a change and its entry commit together.
+- `src/app/` — Routes, layouts and Server Components — one directory per screen, one h1 each.
+- `src/app/actions/` — Server Actions, one file per noun, each validating, authorising and writing in a single transaction.
+- `src/app/api/` — The only two HTTP endpoints: GET /api/health and POST /api/dev/seed.
+- `src/components/ui/` — The design-system primitives — Button, Input, Card, Dialog, Money, EmptyState, ErrorState — built only from theme tokens.
+- `tests/` — Vitest unit and integration tests; integration tests run against a fresh in-memory PGlite and never touch a network.
+
+## Invariants
+These hold for every ticket, whatever it asks for.
+
+- Money is an integer count of minor units, stored and computed as bigint, from the database column to the formatted string. No float is ever assigned to, stored in, or returned for a money value, and Intl.NumberFormat does the only formatting.
+- A balance is a sum of stored rows and never a recalculation. It is read from expense_payer and expense_share alone and never from the stored split rule. Editing or deleting an expense replaces that expense's stored payers and shares, in one transaction with its activity entry, so every balance moves by exactly the difference between the old rows and the new ones; a balance changes only through a write to that expense or to a payment. A change to the split algorithm or to the rounding rule never re-evaluates stored history.
+- The parts of a split always sum exactly to the expense total. Exact-amount and percentage splits that do not are rejected with the discrepancy named in minor units; equal, percentage and share splits assign their entire floor-division remainder to the first payer in the split's member order, and the sum is asserted before the write commits.
+- One currency per group, and no conversion anywhere in the codebase. Every amount in a group is in that group's currency, and the currency is carried on the row so a later per-expense currency can be added without rewriting history.
+- Every read and write of a group's data is authorised on the server against the session that is asking, and the authorisation is expressed inside the query — a membership join, not a separate check a caller can forget. There is no code path that takes a group id and returns its data.
+- Every mutation and its activity entry are written in one transaction: there is no state change without a feed entry and no feed entry without the state change. Separately, a group has exactly one owner at all times, only the owner may rename it, remove a member or archive it, and a member whose balance is non-zero may not leave or be removed.
+
+## Requirements
+Cited by id wherever work is split — an issue's `Covers: TR-3` means this list. The rationale
+and the check that proves each one are in `docs/trd.md`; what is being built and for whom, and
+what deliberately is not, in `docs/prd.md`; how every screen looks and behaves, in `docs/ui.md`.
+
+- **TR-1** Every read and write of a group's data is authorised on the server against the session that is asking, expressed as a membership join inside the query itself. A non-member receives 404 and no data; an unauthenticated request is redirected to sign-in.
+- **TR-2** Every amount is a bigint count of minor units from the database column to the formatted string. No float is ever assigned to, stored in, or returned for a money value, and a money-typed value cannot be given a number without a type error.
+- **TR-3** The parts of every split sum exactly to the expense total. Exact-amount splits that do not sum to the total and percentage splits that do not sum to 100 are rejected, with the error naming what is off and by how many minor units. Equal, percentage and share splits assign their entire floor-division remainder to the first payer in the split's member order, and the sum is asserted before the write commits.
+- **TR-4** A member's net balance in a group equals their total paid minus their total share, summed from the stored expense_payer and expense_share rows alone; a balance is never derived from the expense's stored split rule. Editing or deleting an expense replaces that expense's stored payer and share rows in the same transaction that writes its activity entry, so balances move by exactly the difference the replacement makes, and no balance changes except through a write to that expense or to a payment. A change to the split algorithm or to the rounding rule never re-evaluates stored history: an expense keeps the shares it was written with until somebody edits or deletes it.
+- **TR-5** An expense records one payer or several, and where there are several each payer's part is stored and the parts sum exactly to the expense total; a set of parts that does not sum is rejected with the discrepancy named in minor units.
+- **TR-6** Simplified debts are produced by greedy largest-creditor against largest-debtor matching over the per-member net balances. The result sums to zero, uses at most n − 1 transfers where n is the number of members with a non-zero balance, and is deterministic: the same balances always yield the same transfers.
+- **TR-7** A payment is a first-class record from one member to another, in full or in part, that moves both balances by its amount, appears in the group's feed, and can be deleted only by one of the two members it involves — after which the balances it moved are restored.
+- **TR-8** The home screen reports what the signed-in user owes and is owed in total and per person, across every group they are an active member of, and those totals equal the sum of the per-group balances.
+- **TR-9** A group in which every member's balance is zero says so plainly, on the group balance screen and on the group overview, rather than showing an empty transfer list.
+- **TR-10** Sign-up and sign-in with email and password. The password is stored only as a salted scrypt hash; the session is an opaque random token in an httpOnly, Secure, SameSite=Lax cookie whose SHA-256 is the only thing persisted; signing out deletes the session row on the server and clears the cookie. Sessions expire and a signed-out session does not work even if the cookie is replayed.
+- **TR-11** Failed sign-ins are rate-limited per account and per source address, and the status and response body for an unknown email are byte-identical to those for a wrong password, including when the request is rate-limited.
+- **TR-12** A profile holds a display name and a default currency, both editable, and the default currency is the currency a group the user creates is created in.
+- **TR-13** A group has a name, a currency and an optional type (trip, home, couple, other). Exactly one member is the owner. Only the owner may rename the group, remove a member, or archive it. A member whose balance is non-zero may not leave or be removed, and a user sees only the groups they belong to.
+- **TR-14** An invite link lets any signed-in user join the group. Opening a join link twice is a no-op rather than a second membership. The owner can disable the link, or rotate it, and rotation invalidates the previous token immediately.
+- **TR-15** A placeholder member can be created by name before having an account, so a trip can be recorded before everyone signs up. Claiming is atomic: when two people claim the same placeholder at once, exactly one succeeds and the other is told it is already claimed. Everything recorded against the placeholder belongs to the claimer from that point, and a placeholder that is already claimed cannot be claimed again.
+- **TR-16** Removing a member ends their membership but keeps their stored shares and payer records, so every other member's balance is unchanged by the removal and the group's history still reads correctly.
+- **TR-17** Every mutation writes exactly one activity entry in the same transaction as the change: there is no state change without a feed entry, and no feed entry without the state change.
+- **TR-18** Expenses list newest first by date, filter by member and by category, and search by description; a filter and a search compose, and an empty result set distinguishes 'no expenses match' from 'no expenses yet'.
+- **TR-19** The activity feed exists per group and across all of a user's groups, records expense added, edited and deleted, payment recorded, and member joined, left or removed, each with the actor and the time, and is ordered newest first.
+- **TR-20** GET /api/health executes a real query against the configured database and returns 200 with the round-trip time, or 503 naming the failure without leaking the connection string. It is what sdlc:ready polls.
+- **TR-21** With DATABASE_URL set the application uses that Postgres; with it unset it runs on an in-process PGlite. The same migration list is applied to both, on start in development and on deploy in production, behind a lock so that two concurrent cold starts cannot apply a migration twice. Applying the migrations to an up-to-date database is a no-op.
+- **TR-22** In production a missing required environment variable stops startup with a message naming that variable. In development and CI, with nothing set, the application boots on documented local defaults and logs that it is doing so.
+- **TR-23** Every amount is rendered with the group's currency symbol, separators and fraction digits through Intl.NumberFormat, and is never rendered from a float. A negative balance is presented as a direction — you owe, or you are owed — not only as a minus sign.
+- **TR-24** Every page has exactly one h1 and a correct heading order, a label for every control, a visible focus ring, and is fully operable by keyboard. Empty, loading and error states are rendered for every screen that can reach them; a screen that cannot reach one says why in the brief rather than leaving it blank.
+- **TR-25** The home, group, expenses and balances screens respond in under one second at p75 on an ordinary connection, measured against the production build rather than the dev server.
+- **TR-26** npm run sdlc:seed creates, through the running application, a fixed set of users with known passwords, groups containing one expense of every split type, a multi-payer expense, payments, and an unclaimed placeholder member. Running it twice produces the same state, and it refuses to run in production.
+- **TR-27** The README documents every environment variable with its purpose and whether it is required, one command to run the application locally with nothing installed, and the Vercel deploy from scratch: which database to add, which variables to set, and how migrations run.
 
 ## Commands
-_none detected — fill these in_
+Nothing here runs yet: the repository has no code, so every verb is a stub in `package.json`, and the command beside it is its TARGET. The first ticket whose code a verb runs makes it real (the reserved-path guard allows exactly that once), and ci-verify fails any branch that has code while `sdlc:verify` is still a stub.
 
-## Non-obvious
-_Empty. This is the most valuable section and a scan cannot write it._
+- `sdlc:verify` — stub now; target `npm run typecheck && npm run lint && vitest run`
+- `sdlc:serve` — stub now; target `next build && next start --port 3000`
+- `sdlc:seed` — stub now; target `node scripts/seed.mjs`
+- `sdlc:ready` — stub now; target `curl -fsS --max-time 5 http://localhost:3000/api/health`
 
-Add what a newcomer gets wrong: which module owns what, the abstraction that looks
-redundant but is not, the test that is slow for a reason, the service that must be running
-locally. The Librarian appends here as the system learns, but it starts from what you write.
+Stubbed for now:
+- sdlc:verify — a stub on this branch, which has no code. Made real by the first ticket that lands src/db, the package.json scripts typecheck and lint, and at least one file under tests/; the spec's order of work step 1 (skeleton, database, accounts, sessions, health) owns it.
+- sdlc:serve — a stub on this branch. Made real by next.config.ts, an app/ directory that builds, and a boot that answers on port 3000; the spec's order of work step 1 owns it.
+- sdlc:seed — a stub on this branch. Made real by scripts/seed.mjs and app/api/dev/seed/route.ts, which is the spec's order of work step 5 (activity, search, filters, seed, deploy guide).
+- sdlc:ready — a stub on this branch. Made real by app/api/health/route.ts returning 200 with a real query; the spec's order of work step 1 owns it.
+
+## Deploy
+Production is Vercel, connected to this repository, running the Next.js 16 Node.js runtime, with a Neon Postgres added from Vercel's Storage tab and its pooled connection string in DATABASE_URL. The same DATABASE_URL variable is the whole switch: set, the app is on Neon; unset, it is on in-process PGlite. Migrations are not a Vercel build step — they are applied by src/db/migrate.ts on boot behind a Postgres advisory lock, so a cold start or two racing each other applies each migration once and never twice.
+
+Neither the Vercel project nor the Neon database exists yet: the repository has no remote configured and no environment has been created, so there is no preview for QA to drive today. A human has to connect the Vercel project and provision Neon before any deployment is possible; the spec's order of work step 1 and its README deploy guide are where that is recorded, and the README is the deliverable that says exactly which variables to set. A pull request does get a Vercel preview URL automatically once the project is connected, with no repository configuration, and that preview is for a human to look at.
+
+QA does not drive that preview. .sdlc/config.yml has env.mode: compose, so QA builds the branch, boots it on the runner at http://localhost:3000, seeds it through the app's own endpoint and drives localhost. The consequence to state plainly: what QA proves is the production build against a local database, and the Neon path is covered only by tests and by a human opening the preview. If a Neon connection string is present in the QA environment, the same code runs against the real driver and sdlc:seed writes into that database — so previews should be pointed at a Neon branch, never at production. The maintainer may prefer env.mode: preview; that is one of the open questions, and it changes the seed and ready verbs rather than the application.
+
+## Open questions
+- qa_auth.mode in .sdlc/config.yml is `none`, but the spec requires real accounts and every screen needs a session. As `none`, QA is given no credentials and can only test the sign-up and signed-out paths, which is most of the product untested. It should be `fixture`, using the seed's known-password users — the config's own comment says fixture is for plaintext credentials against an ephemeral stack and requires exactly what is already true here: env.mode is compose and api_allowlist is local-only. The file is a reserved path, so this is the maintainer's to change; nothing in this brief can make it so.
+- No Vercel project and no Neon database exist for this repository. Who connects them, and which Neon plan? Nothing deploys until a human does this, and the deploy guide in the README is only as good as the answer.
+- Should env.mode stay `compose` — QA builds the branch and drives it on the runner against PGlite — or become `preview`, where QA drives the Vercel preview? Compose proves the production build and nothing about the Neon path; preview proves the Neon path and needs a preview-scoped DATABASE_URL that does not point at production. The seed and ready verbs work either way; what changes is what QA is able to conclude.
+- Which currencies must be supported at launch? This brief assumes any ISO 4217 code, formatted through Intl, with each group's currency set at creation and no conversion. If the answer is a fixed short list, the currency picker becomes a closed list and the README can say so.
+- Can the last member of a group leave? This brief assumes a group always has exactly one owner, so a member with a zero balance may leave unless they are the last member, who must transfer ownership or archive. The alternative — allowing an ownerless group — contradicts the invariant and is not recommended, but it is a product decision rather than a technical one.

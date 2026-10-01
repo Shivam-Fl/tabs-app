@@ -1,0 +1,81 @@
+{
+  "sections": [
+    {
+      "id": "S-1",
+      "title": "Tabs — product requirements",
+      "source": "docs/spec/tabs.md",
+      "line": 1,
+      "sha": "d317796a4a5d"
+    },
+    {
+      "id": "S-2",
+      "title": "Hard constraints",
+      "source": "docs/spec/tabs.md",
+      "line": 9,
+      "sha": "77c421e99f41"
+    },
+    {
+      "id": "S-3",
+      "title": "Users and accounts",
+      "source": "docs/spec/tabs.md",
+      "line": 28,
+      "sha": "e0e63323fb2e"
+    },
+    {
+      "id": "S-4",
+      "title": "Groups and members",
+      "source": "docs/spec/tabs.md",
+      "line": 35,
+      "sha": "e90d962b20e1"
+    },
+    {
+      "id": "S-5",
+      "title": "Expenses",
+      "source": "docs/spec/tabs.md",
+      "line": 48,
+      "sha": "261e8dc979b2"
+    },
+    {
+      "id": "S-6",
+      "title": "Balances and settling up",
+      "source": "docs/spec/tabs.md",
+      "line": 62,
+      "sha": "93b9c8894c48"
+    },
+    {
+      "id": "S-7",
+      "title": "Activity",
+      "source": "docs/spec/tabs.md",
+      "line": 71,
+      "sha": "491fa2adb31f"
+    },
+    {
+      "id": "S-8",
+      "title": "Experience",
+      "source": "docs/spec/tabs.md",
+      "line": 76,
+      "sha": "50b4ffc97fde"
+    },
+    {
+      "id": "S-9",
+      "title": "Operations",
+      "source": "docs/spec/tabs.md",
+      "line": 85,
+      "sha": "2374dcd4b729"
+    },
+    {
+      "id": "S-10",
+      "title": "Not in this version",
+      "source": "docs/spec/tabs.md",
+      "line": 93,
+      "sha": "ee0d7737d46e"
+    },
+    {
+      "id": "S-11",
+      "title": "Order of work",
+      "source": "docs/spec/tabs.md",
+      "line": 100,
+      "sha": "6ecc351cd1fa"
+    }
+  ]
+}
