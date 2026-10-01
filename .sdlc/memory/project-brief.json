@@ -1,0 +1,1284 @@
+{
+  "issue": 1,
+  "product": "Tabs is a shared-expense web application for friends, flatmates and trips. A group records expenses — who paid (one person or several, in parts), what it was for, and how it splits — and the app derives, from that record alone, every member's net balance, who owes whom, and the smallest set of transfers that settles the group. Members can be invited by link, added by name before they have accounts, and removed or leave when their balance is zero. It is a server-rendered Next.js application on one Postgres database: in-process PGlite when no DATABASE_URL is set, so development, the test suite, CI and browser QA need nothing installed, and Neon when one is, so nothing a user saves is lost on a redeploy. Money is integer minor units from the database to the screen, and every read and write of a group's data is authorised on the server against the session that is asking.",
+  "stack": {
+    "choice": "TypeScript 5.9 in strict mode on Node 22; one Next.js 16.3 App Router application (React 19.3, Turbopack) deployed to Vercel; Drizzle ORM 0.45 over PostgreSQL 16 — Neon via @neondatabase/serverless 1.2 (Pool/WebSocket driver, drizzle-orm/neon-serverless) when DATABASE_URL is set, in-process @electric-sql/pglite 0.5.8 (drizzle-orm/pglite) when it is not; Zod 4.6 for every input that crosses a boundary; Tailwind CSS 4.3 (@theme tokens) for all styling; Vitest 5 with @testing-library/react for unit and integration tests. No other ORM, no client state library, no auth framework, no native addons, no e2e runner.",
+    "why": "Most of this stack is the spec's own, so the decisions left open were the ones below, and each was decided against the pipeline rather than against taste. Drizzle over Prisma: ci-verify installs dependencies with --ignore-scripts so no dependency can run code before the checks that judge the PR, and @prisma/engines downloads its binaries from a postinstall hook — with that hook skipped the client is unusable unless verify.prepare is edited, and verify.prepare lives in .sdlc/config.yml, a path no agent may touch. Drizzle is TypeScript source with no install step, and it ships a first-party driver for both backends, so the same schema and the same generated migrations run on PGlite locally and on Neon in production. Pinning TypeScript 5.9 rather than the current 7.0.2 for the same reason one version earlier: typescript-eslint's declared peer range is >=4.8.4 <6.1.0, so 7.x makes the lint step uninstallable rather than merely noisy. Hand-rolled sessions rather than an auth framework, because the whole requirement is an opaque token in an httpOnly cookie plus a row in a table, and every framework brings a configuration surface, a callback model and a version history that the pipeline's agents would each have to learn. Server Components and Server Actions rather than a REST client, because every screen here is a read the server can do directly and a write that a form can post; an API layer would be a second description of the same domain that could disagree with the first. And no Playwright: the QA stage already drives a real browser against a real build, and a second browser harness in CI would double the slowest thing in the pipeline to re-run a suite that would mostly re-test the app.",
+    "rejected": [
+      {
+        "option": "Prisma ORM",
+        "because": "@prisma/engines@6 declares a postinstall hook that fetches the platform binaries. ci-verify installs with --ignore-scripts, so the client never generates; the documented workaround is a verify.prepare entry in .sdlc/config.yml, which is a reserved path no ticket may edit. Drizzle needs no install step and has native PGlite and Neon drivers."
+      },
+      {
+        "option": "Auth.js / NextAuth v5",
+        "because": "The requirement is an opaque session token in an httpOnly cookie and a sessions table. A framework adds a provider/secret/callback configuration, its own migration story and a version history that moves, none of which the product uses. A session table plus requireUser() is about eighty lines and is the same code the tests read."
+      },
+      {
+        "option": "REST API plus fetch and a client cache (React Query, Redux, Zustand)",
+        "because": "Every screen is a server read and every write is a form post, so a client cache would hold a second copy of state the server already owns, invalidated by hand. Server Components read the database directly and Server Actions mutate it, which removes the client-cache invalidation class of bug entirely."
+      },
+      {
+        "option": "tRPC or a typed-RPC layer",
+        "because": "It adds a codegen step and a second type system to learn for a product with about a dozen server actions. Zod schemas shared between the action and its test give the same end-to-end typing with one file instead of a toolchain."
+      },
+      {
+        "option": "Playwright for end-to-end tests in CI",
+        "because": "The QA stage already boots the real application and drives a real browser, which is the same coverage with the fixtures already in place. verify.e2e is empty in .sdlc/config.yml, and a browser harness in the 45-minute CI job is the most likely thing to make every pull request flaky."
+      },
+      {
+        "option": "A component library (shadcn/ui, Radix, Mantine)",
+        "because": "It brings a large dependency tree and its own visual language, and the spec asks for one consistent product with tokens every screen obeys. About ten primitives in src/components/ui, written against the theme tokens, cover everything Tabs renders."
+      },
+      {
+        "option": "Argon2 for password hashing (argon2, @node-rs/argon2)",
+        "because": "Both are native addons, which is the one dependency class this CI cannot install safely and this platform must bundle. OWASP ranks scrypt immediately behind Argon2id and Node ships it in crypto, so the requirement — a slow, salted hash — is met with no dependency and no install step at all."
+      }
+    ]
+  },
+  "architecture": {
+    "shape": "One Next.js application, one database, one boundary. Reads are React Server Components that call Drizzle directly and render; there is no HTTP hop between a page and the data it shows. Writes are Server Actions that validate with Zod, authorise against the session, and run their writes inside one transaction. The database is chosen once, at import time, from the presence of DATABASE_URL: Neon when it is set, a single in-process PGlite instance when it is not, with both wrapped in the same Drizzle instance type so no call site knows which one it has. Authorisation is part of the query rather than a check that can be forgotten — every read of group data is a join against the caller's membership, so a missing membership yields no rows rather than a bug. Two Route Handlers exist and no more: GET /api/health, which the readiness poll and any uptime check use, and POST /api/dev/seed, which is how fixtures get into a database that lives inside the app's own process. The browser never speaks to the database and never speaks to a third party: every request is same-origin, which is also what .sdlc/config.yml's api_allowlist of localhost-only is built for.",
+    "modules": [
+      {
+        "path": "src/db/schema.ts",
+        "holds": "The Drizzle schema: every table, column, constraint and index. The single description of the data model."
+      },
+      {
+        "path": "src/db/client.ts",
+        "holds": "Chooses Neon or PGlite from DATABASE_URL and exports one Drizzle instance, holding PGlite as a process singleton."
+      },
+      {
+        "path": "src/db/migrate.ts",
+        "holds": "Applies the generated migration list to whichever database is configured, behind a lock, and is safe to call on every boot."
+      },
+      {
+        "path": "drizzle/",
+        "holds": "The generated SQL migration files — the only schema history, applied identically to PGlite and Neon."
+      },
+      {
+        "path": "src/lib/auth.ts",
+        "holds": "Password hashing, session creation and revocation, sign-in rate limiting, and the requireUser() every page and action calls."
+      },
+      {
+        "path": "src/lib/access.ts",
+        "holds": "The authorisation boundary: membership-scoped queries, requireMember(), and the owner-only checks, so no call site can read a group by id alone."
+      },
+      {
+        "path": "src/lib/money.ts",
+        "holds": "Parsing, formatting and splitting amounts in integer minor units. The only file in which arithmetic on money happens."
+      },
+      {
+        "path": "src/lib/balances.ts",
+        "holds": "Per-member net balances and the simplified-debt algorithm, computed from stored shares and payer amounts."
+      },
+      {
+        "path": "src/lib/activity.ts",
+        "holds": "The only writer of the feed, always inside the caller's transaction so a change and its entry commit together."
+      },
+      {
+        "path": "src/app/",
+        "holds": "Routes, layouts and Server Components — one directory per screen, one h1 each."
+      },
+      {
+        "path": "src/app/actions/",
+        "holds": "Server Actions, one file per noun, each validating, authorising and writing in a single transaction."
+      },
+      {
+        "path": "src/app/api/",
+        "holds": "The only two HTTP endpoints: GET /api/health and POST /api/dev/seed."
+      },
+      {
+        "path": "src/components/ui/",
+        "holds": "The design-system primitives — Button, Input, Card, Dialog, Money, EmptyState, ErrorState — built only from theme tokens."
+      },
+      {
+        "path": "tests/",
+        "holds": "Vitest unit and integration tests; integration tests run against a fresh in-memory PGlite and never touch a network."
+      }
+    ]
+  },
+  "invariants": [
+    "Money is an integer count of minor units, stored and computed as bigint, from the database column to the formatted string. No float is ever assigned to, stored in, or returned for a money value, and Intl.NumberFormat does the only formatting.",
+    "A balance is a sum of stored rows and never a recalculation. It is read from expense_payer and expense_share alone and never from the stored split rule. Editing or deleting an expense replaces that expense's stored payers and shares, in one transaction with its activity entry, so every balance moves by exactly the difference between the old rows and the new ones; a balance changes only through a write to that expense or to a payment. A change to the split algorithm or to the rounding rule never re-evaluates stored history.",
+    "The parts of a split always sum exactly to the expense total. Exact-amount and percentage splits that do not are rejected with the discrepancy named in minor units; equal, percentage and share splits assign their entire floor-division remainder to the first payer in the split's member order, and the sum is asserted before the write commits.",
+    "One currency per group, and no conversion anywhere in the codebase. Every amount in a group is in that group's currency, and the currency is carried on the row so a later per-expense currency can be added without rewriting history.",
+    "Every read and write of a group's data is authorised on the server against the session that is asking, and the authorisation is expressed inside the query — a membership join, not a separate check a caller can forget. There is no code path that takes a group id and returns its data.",
+    "Every mutation and its activity entry are written in one transaction: there is no state change without a feed entry and no feed entry without the state change. Separately, a group has exactly one owner at all times, only the owner may rename it, remove a member or archive it, and a member whose balance is non-zero may not leave or be removed."
+  ],
+  "conventions": [
+    "src/ is the only place product code lives; nothing imports from .sdlc/ and nothing in .sdlc/ imports from src/.",
+    "Files are kebab-case (db/client.ts, lib/money.ts, components/ui/empty-state.tsx); directories are single words; React components are PascalCase in .tsx files only.",
+    "Money columns are bigint and are named <something>_minor. Anything that is not money is named for what it is, with no abbreviation.",
+    "All arithmetic on money goes through src/lib/money.ts. A reviewer should reject a '+', '-' or '/' applied to an amount anywhere else, and a lint rule enforces that a money value is never typed as number.",
+    "Server Components do the reading; 'use client' appears only where there is genuine interaction — forms with client validation, dialogs, and anything reading a browser API. A Client Component never imports from src/db or src/lib/auth.",
+    "Writes are Server Actions in src/app/actions/, one file per noun. Each validates with Zod, calls the authorisation helper before touching data, and wraps its writes in a single transaction.",
+    "Errors from a Server Action are returned as a typed result ({ ok: false, fieldErrors, formError }) that the form renders; they are never thrown for an expected failure and never shown as a raw message to a user.",
+    "Every input crossing a boundary — a form, a route handler, a query parameter — is parsed by a Zod schema in the same file as the action or route that consumes it, and the parsed value, never the raw one, is used.",
+    "Tests live in tests/ beside no source: unit tests as tests/<module>.test.ts, integration tests as tests/integration/<feature>.test.ts running against a fresh in-memory PGlite per test file. A test that needs a network or a real Postgres is a bug in the test.",
+    "sdlc:verify runs, in order: tsc --noEmit, eslint, vitest run. Typecheck first because it is the cheapest and catches the most; lint second because a formatting argument is not worth a model turn; tests last because they are the slowest.",
+    "next.config.ts lists @electric-sql/pglite in serverExternalPackages. It is not on Next's automatic external list, and bundling a WASM Postgres is how the database silently stops working in a build.",
+    "No route sets runtime = 'edge'. The Neon Pool is a process-level singleton and Edge functions cannot hold one; the app runs on the Node.js runtime only.",
+    "A dependency is acceptable when it removes a category of bug we would otherwise write by hand, is pure JavaScript with no install script and no native binary, and is maintained. Anything else needs a decision in this file, not a line in package.json.",
+    "Versions are pinned exactly in package.json, not with carets, so that what CI proves is what QA drives and what Vercel builds."
+  ],
+  "commands": {
+    "verify": "npm run typecheck && npm run lint && vitest run",
+    "serve": "next build && next start --port 3000",
+    "seed": "node scripts/seed.mjs",
+    "ready": "curl -fsS --max-time 5 http://localhost:3000/api/health",
+    "stubbed": [
+      "sdlc:verify — a stub on this branch, which has no code. Made real by the first ticket that lands src/db, the package.json scripts typecheck and lint, and at least one file under tests/; the spec's order of work step 1 (skeleton, database, accounts, sessions, health) owns it.",
+      "sdlc:serve — a stub on this branch. Made real by next.config.ts, an app/ directory that builds, and a boot that answers on port 3000; the spec's order of work step 1 owns it.",
+      "sdlc:seed — a stub on this branch. Made real by scripts/seed.mjs and app/api/dev/seed/route.ts, which is the spec's order of work step 5 (activity, search, filters, seed, deploy guide).",
+      "sdlc:ready — a stub on this branch. Made real by app/api/health/route.ts returning 200 with a real query; the spec's order of work step 1 owns it."
+    ]
+  },
+  "deploy": "Production is Vercel, connected to this repository, running the Next.js 16 Node.js runtime, with a Neon Postgres added from Vercel's Storage tab and its pooled connection string in DATABASE_URL. The same DATABASE_URL variable is the whole switch: set, the app is on Neon; unset, it is on in-process PGlite. Migrations are not a Vercel build step — they are applied by src/db/migrate.ts on boot behind a Postgres advisory lock, so a cold start or two racing each other applies each migration once and never twice.\n\nNeither the Vercel project nor the Neon database exists yet: the repository has no remote configured and no environment has been created, so there is no preview for QA to drive today. A human has to connect the Vercel project and provision Neon before any deployment is possible; the spec's order of work step 1 and its README deploy guide are where that is recorded, and the README is the deliverable that says exactly which variables to set. A pull request does get a Vercel preview URL automatically once the project is connected, with no repository configuration, and that preview is for a human to look at.\n\nQA does not drive that preview. .sdlc/config.yml has env.mode: compose, so QA builds the branch, boots it on the runner at http://localhost:3000, seeds it through the app's own endpoint and drives localhost. The consequence to state plainly: what QA proves is the production build against a local database, and the Neon path is covered only by tests and by a human opening the preview. If a Neon connection string is present in the QA environment, the same code runs against the real driver and sdlc:seed writes into that database — so previews should be pointed at a Neon branch, never at production. The maintainer may prefer env.mode: preview; that is one of the open questions, and it changes the seed and ready verbs rather than the application.",
+  "decisions": [
+    {
+      "title": "Server Components and Server Actions, with no REST layer",
+      "decision": "Pages are React Server Components that call Drizzle directly; mutations are Server Actions in src/app/actions/; exactly two Route Handlers exist, GET /api/health and POST /api/dev/seed. There is no client-side fetch, no client cache and no shared API description.",
+      "because": "Every screen is a read the server can perform and a write a form can post, so an HTTP layer between the two would be a second, driftable description of the same domain. It would also put a client cache in charge of invalidation, which is where a stale-balance bug comes from. Fewer moving parts is the difference between QA finding bugs and QA finding infrastructure.",
+      "consequences": "Easy: a form works without JavaScript; there is no cache to invalidate after a write; the whole data flow is readable in one file per screen. Hard: anything that genuinely needs a public or cross-origin API later has to be added as a Route Handler and a CORS policy, and progressive enhancement outside forms (infinite scroll, optimistic polling) needs a Client Component that calls a Server Action rather than a URL."
+    },
+    {
+      "title": "One data layer, two drivers, chosen by DATABASE_URL at runtime",
+      "decision": "src/db/client.ts inspects DATABASE_URL once at import and returns either drizzle-orm/neon-serverless over a @neondatabase/serverless Pool or drizzle-orm/pglite over one in-process PGlite instance. Both are typed as the same Drizzle instance, so no call site branches on the backend. PGlite is held in a process singleton and is in-memory unless PGLITE_DATA_DIR names a directory.",
+      "because": "The spec requires zero-setup local development, CI and QA against real Postgres semantics, and no data loss in production. Two backends with one interface is the only arrangement that gives all three, and the PGlite single-connection limit means the instance must be a singleton or the same directory can be opened twice and corrupted.",
+      "consequences": "Easy: development, tests and QA need nothing installed and no account, and the SQL that runs in CI is the SQL that runs in production. Hard: PGlite is a single connection, so a slow query blocks every other request locally in a way Neon will not reproduce; nothing may depend on connection-scoped state, LISTEN/NOTIFY or multiple connections; and the two backends can diverge on the rare extension or collation PGlite does not carry."
+    },
+    {
+      "title": "Drizzle, not Prisma — the CI installs with --ignore-scripts",
+      "decision": "Drizzle ORM 0.45 with drizzle-kit generating SQL migrations, and the migration files checked in under drizzle/. No code generation step runs at install or at boot.",
+      "because": "ci-verify installs dependencies with --ignore-scripts so that no dependency can run code before the checks that judge the pull request. @prisma/engines fetches its binaries from a postinstall hook, and with that hook skipped the client never generates; the documented fix is a verify.prepare entry in .sdlc/config.yml, which is a reserved path no agent is permitted to edit. Drizzle ships TypeScript source, needs no install step, and has first-party drivers for both backends, so the same schema and the same migrations run on each.",
+      "consequences": "Easy: `npm ci --ignore-scripts` produces a working checkout; the schema is readable TypeScript rather than a generated client; no binary is ever downloaded during a build. Hard: no Prisma Studio equivalent worth having, relations and type inference are more manual, and a schema change needs an explicit `drizzle-kit generate` and a reviewed SQL file rather than an implicit regeneration."
+    },
+    {
+      "title": "Migrations run on boot behind a lock, not as a build step",
+      "decision": "src/db/migrate.ts applies the pending files from drizzle/ whenever the application starts, taking a Postgres advisory lock first and re-reading the applied list inside the lock. It is called from the database client's initialisation path, so development, CI, QA and production all take the same route.",
+      "because": "The spec asks for the same migrations to run automatically in development and on deploy, and a Vercel build step is the wrong place: the build environment and the runtime environment are different, a preview build would migrate a database it does not own, and several cold starts can race. An advisory lock makes the operation idempotent under exactly that race. It also requires the WebSocket Pool driver rather than the HTTP driver, which has no session to hold a lock in.",
+      "consequences": "Easy: there is no separate deploy step to forget, and a preview or a cold start is always on a current schema. Hard: the first request after a deploy pays the migration cost, a failed migration surfaces as a boot error rather than a deploy error, and the advisory lock means the app needs the session-capable driver — the cheaper stateless HTTP driver is not available to us."
+    },
+    {
+      "title": "Sessions are a table of opaque tokens; no auth framework",
+      "decision": "Sign-in generates 32 random bytes, stores only their SHA-256 in a sessions row with an expiry, and sets the raw token in an httpOnly, Secure, SameSite=Lax cookie. Every page and action resolves the cookie to a user through one requireUser() helper. Signing out deletes the row and clears the cookie. Failed sign-ins are counted in a login_attempts table keyed by a hash of the email and the source address.",
+      "because": "The requirement is a secure httpOnly cookie and a session that ends on the server, and that is a table and a helper. A framework would add provider and callback configuration, its own session storage decisions and a version history that moves, all of which the pipeline's agents would have to learn before writing a line of product code. A database-backed rate limiter is also the only kind that works on Vercel, where a per-instance memory counter resets on every cold start and is trivially bypassed.",
+      "consequences": "Easy: the security properties are visible in one file a reviewer can read; rate limiting survives a cold start and works across every function instance. Hard: we own the details — cookie rotation, expiry, CSRF posture on Server Actions and the exact failure message — and password reset and account deletion, which are non-goals here, are more work than they would be under a framework that ships them."
+    },
+    {
+      "title": "Passwords hashed with Node's built-in scrypt, not Argon2",
+      "decision": "crypto.scryptSync with N = 2^17, r = 8, p = 1 and a 16-byte random salt per password, stored as a single string carrying the parameters, the salt and the hash. Verification re-derives with the stored parameters. Parameters are recorded in the hash string so they can be raised later without invalidating existing passwords.",
+      "because": "OWASP's password storage guidance ranks Argon2id first and scrypt immediately behind it, with N = 2^17, r = 8, p = 1 as the minimum. Every Argon2 package for Node is a native addon, which is precisely the dependency class this CI cannot install with scripts disabled and which a Vercel function has to bundle. crypto.scrypt is the second-strongest approved algorithm with no dependency, no install step and identical behaviour on every runner.",
+      "consequences": "Easy: no native binary anywhere in the dependency tree, one line of configuration, and the cost factor is legible. Hard: a hash at N = 2^17 takes about 128 MB and roughly a quarter second, so sign-in is deliberately the most expensive thing the app does and the rate limiter is not optional; and we are one algorithm behind the current OWASP preference, which should be revisited if a scriptless Argon2 binding becomes dependable."
+    },
+    {
+      "title": "Fixtures reach the database through the app, not around it",
+      "decision": "POST /api/dev/seed is a Route Handler in the application that rebuilds a fixed set of users, groups, expenses of every split type, a multi-payer expense, payments and an unclaimed placeholder. scripts/seed.mjs — what sdlc:seed runs — is a small Node script that calls that endpoint over localhost. The endpoint refuses to run when NODE_ENV is production.",
+      "because": "Locally the database is PGlite, which is one connection inside one process with a single exclusive handle on its data directory; a second process opening the same directory risks corrupting it. A seed script that connects to the database directly would work against Neon and silently damage the local case, which is the case CI and QA actually run. Going through the app's own HTTP endpoint is the one path that works identically on both backends, and it also exercises the application's own write path and authorisation rather than writing rows behind its back.",
+      "consequences": "Easy: one seed implementation for both backends, QA's fixtures are exactly the shape the application writes, and seeding is available on a Vercel preview. Hard: the seed depends on the app being up, which is why sdlc:seed runs after sdlc:ready; the endpoint is a mutation surface that must be impossible to reach in production, which makes its guard a security requirement rather than a convenience; and the fixtures must be reset rather than appended, so seeding twice gives the same state."
+    },
+    {
+      "title": "Money is bigint minor units, and a split is stored as its shares",
+      "decision": "Every amount is a bigint count of minor units in a bigint column. Equal, percentage and share splits are computed at write time with bigint floor division and the whole remainder assigned to the first payer in the split's member order; the resulting per-member amounts are written to an expense_shares table. Balances read those stored shares and the stored per-payer amounts, and never re-evaluate a split rule.",
+      "because": "The spec requires that a split never loses or invents a paisa and that the remainder rule be stated and tested. Storing the computed shares is what makes that checkable and what makes a balance stable: without them, editing an expense's split type would silently restate what people already owed, and removing a member would erase their history from everyone else's balance.",
+      "consequences": "Easy: the sum invariant is a single assertion at the point of write and a property test can prove it; a balance is a plain sum over rows; changing the split rule later cannot rewrite the past. Hard: bigint does not serialise to JSON, so amounts cross the server/client boundary as decimal strings; and editing an expense must recompute its shares in the same transaction, which is more work than re-deriving them on read."
+    },
+    {
+      "title": "Debts are simplified greedily, and the brief says what that guarantees",
+      "decision": "src/lib/balances.ts computes each member's net balance, separates creditors from debtors, and repeatedly settles the largest debtor against the largest creditor. The result is deterministic for a given set of balances, sums to zero, and uses at most n − 1 transfers where n is the number of members with a non-zero balance.",
+      "because": "The spec asks for the fewest payments and asks us to state which algorithm and what it guarantees. The true minimum is a subset-sum partition problem and is not solvable in polynomial time, so no algorithm offers it. Greedy largest-first is the standard answer, is O(n log n), and the bound it does provide is a guarantee a user can be told about plainly.",
+      "consequences": "Easy: the result is explainable to a person ('you owe A, B pays C'), deterministic, and cheap enough to run on every group page. Hard: it is not always the mathematical minimum, so a group can need one more transfer than strictly necessary, and the guarantee must be stated in the interface to the user rather than implied. Do not add 'optimal' to any copy about it."
+    },
+    {
+      "title": "TypeScript 5.9, not 7.0",
+      "decision": "typescript pinned to 5.9.x and @types/node pinned to the 22.x line, matching the Node 22 runtime ci-verify uses.",
+      "because": "TypeScript's current latest is 7.0.2, the native compiler, but typescript-eslint 8.71 declares a peer range of >=4.8.4 <6.1.0. Adopting 7.x therefore makes `npm run lint` uninstallable rather than merely unhappy, and the fix would be to drop type-aware linting — which is the part of linting that catches real bugs in a TypeScript codebase. @types/node's latest line tracks Node 26, while CI runs Node 22, so the latest line would typecheck against APIs the runner does not have.",
+      "consequences": "Easy: the toolchain installs and lints with types on a clean runner, and the type definitions match the runtime that runs them. Hard: the project is a major version behind the compiler and will need a deliberate migration when typescript-eslint widens its range; that migration is a decision for a ticket, with a lint rule, not a version bump nobody reads."
+    },
+    {
+      "title": "The split rule is stored with the expense; the shares it produced are stored beside it",
+      "decision": "Every expense carries its split_type, and one expense_split_input row per included member holds the number that member was given. An edit replaces that set and the expense's expense_payer and expense_share rows in one transaction with the expense's activity entry. Balances are still summed from expense_payer and expense_share alone: the stored rule is read only to redisplay the edit form and to say what an edit changed.",
+      "because": "The maintainer asked for the rule and not only its result, so an edit reopens showing exactly what was entered and an activity entry can name what changed. Without it the form can only guess at what was typed — a percentage split comes back as the shares it produced — and 'changed from equal to exact' is unfalsifiable. Keeping the rule and the result in separate tables is what stops the rule from becoming a second source of truth for balances: the rule is an input, the shares are the ledger, and only the ledger is summed.",
+      "consequences": "Easy: the edit form is a direct render of the stored inputs; an activity entry can diff old inputs against new and name the fields that moved; QA can assert an exact round trip of what was typed. Hard: an expense write now touches three child tables instead of two, so the transaction and its sum assertions carry more; changing the stored input's unit is a migration over stored history rather than a code change; and the rule table is a trap for anyone who sums it by mistake, so exactly one function computes a share from a rule, it is called only on the write path, and no read path calls it."
+    }
+  ],
+  "open_questions": [
+    "qa_auth.mode in .sdlc/config.yml is `none`, but the spec requires real accounts and every screen needs a session. As `none`, QA is given no credentials and can only test the sign-up and signed-out paths, which is most of the product untested. It should be `fixture`, using the seed's known-password users — the config's own comment says fixture is for plaintext credentials against an ephemeral stack and requires exactly what is already true here: env.mode is compose and api_allowlist is local-only. The file is a reserved path, so this is the maintainer's to change; nothing in this brief can make it so.",
+    "No Vercel project and no Neon database exist for this repository. Who connects them, and which Neon plan? Nothing deploys until a human does this, and the deploy guide in the README is only as good as the answer.",
+    "Should env.mode stay `compose` — QA builds the branch and drives it on the runner against PGlite — or become `preview`, where QA drives the Vercel preview? Compose proves the production build and nothing about the Neon path; preview proves the Neon path and needs a preview-scoped DATABASE_URL that does not point at production. The seed and ready verbs work either way; what changes is what QA is able to conclude.",
+    "Which currencies must be supported at launch? This brief assumes any ISO 4217 code, formatted through Intl, with each group's currency set at creation and no conversion. If the answer is a fixed short list, the currency picker becomes a closed list and the README can say so.",
+    "Can the last member of a group leave? This brief assumes a group always has exactly one owner, so a member with a zero balance may leave unless they are the last member, who must transfer ownership or archive. The alternative — allowing an ownerless group — contradicts the invariant and is not recommended, but it is a product decision rather than a technical one."
+  ],
+  "confidence": 78,
+  "research": {
+    "questions": [
+      "Which Postgres driver does Vercel actually support now, and is the obvious package still maintained?",
+      "Can PGlite run inside a Next.js server, and what are its real limits around connections, processes and its data directory?",
+      "What does PGlite install — does it need a postinstall, a native build or anything ci-verify's --ignore-scripts would break?",
+      "Is Drizzle able to speak to both backends from one schema, including running the same migrations against each?",
+      "What are the current stable versions, and what did the most recent Next.js major change in ways this application would trip over?",
+      "What does OWASP currently recommend for password hashing, and is Node's built-in scrypt an acceptable answer?",
+      "Which Neon driver supports the things a migration needs — transactions and a session-scoped advisory lock — and does it work on Vercel?",
+      "Does the version of TypeScript that ships today work with the linter, and does @types/node match the Node version CI runs?"
+    ],
+    "findings": [
+      {
+        "claim": "@vercel/postgres is deprecated and Neon is the supported path, so the production driver is @neondatabase/serverless.",
+        "evidence": "The package's own registry metadata carries a deprecation notice: \"@vercel/postgres is deprecated. If you are setting up a new database, you can choose an alternate storage solution from the Vercel Marketplace. If you had an existing Vercel Postgres database, it should have been migrated to Neon as a native Vercel integration.\" Vercel's documentation states \"Vercel Postgres is no longer available. If you had an existing Vercel Postgres database, we automatically moved it to Neon in December 2024.\"",
+        "source": "https://www.npmjs.com/package/@vercel/postgres and https://vercel.com/docs/postgres",
+        "confidence": 95,
+        "affects": "stack.choice, and the decision to add Neon rather than any Vercel-owned database."
+      },
+      {
+        "claim": "PGlite is a single exclusive connection, and opening the same data directory from a second process risks corruption — so it must be a process singleton and nothing may connect to it out of band.",
+        "evidence": "The PGlite documentation states \"As PGlite only has a single exclusive connection to the database, we provide a multi-tab worker to enable sharing a PGlite instance between multiple browser tabs.\" Supabase's write-up of building on PGlite repeats it: \"PGlite has a single-connection limit which may not work with all clients.\" The PGlite repository's own issue #323 carries the maintainer guidance: \"There is no support for concurrent connections and you are likely to corrupt the database if you open it multiple times at once.\"",
+        "source": "https://pglite.dev/docs/ and https://github.com/electric-sql/pglite/issues/323",
+        "confidence": 90,
+        "affects": "The PGlite singleton in src/db/client.ts, and the decision to seed fixtures through the app over HTTP rather than through a script that opens the database."
+      },
+      {
+        "claim": "PGlite installs with no dependencies and no install script, so it survives this repository's --ignore-scripts CI install.",
+        "evidence": "Reading the published package's manifest directly: `@electric-sql/pglite@0.5.8` declares `dependencies: {}`, `optionalDependencies: {}` and no `postinstall` or `prepare` script — its only scripts are test, build, dev, lint and typecheck. A clean `npm install --ignore-scripts` of it alongside drizzle-orm and @neondatabase/serverless completed with exit status 0.",
+        "source": "first-party: npm registry manifest for @electric-sql/pglite@0.5.8, installed and inspected locally",
+        "confidence": 95,
+        "affects": "stack.choice, and the PGlite half of the two-backend decision."
+      },
+      {
+        "claim": "Drizzle ships first-class drivers and migrators for both backends, so one schema and one migration list serve PGlite and Neon.",
+        "evidence": "The installed drizzle-orm@0.45.3 contains `pglite/` (driver, session and migrator) and `neon-serverless/`, `neon-http/` (both with driver, session and migrator). Verified by listing the package's own directories after a real install rather than from documentation.",
+        "source": "first-party: node_modules/drizzle-orm@0.45.3, installed locally and listed",
+        "confidence": 95,
+        "affects": "The two-backend architecture, and the decision that migrations are generated SQL applied to either."
+      },
+      {
+        "claim": "The Neon HTTP driver cannot run migrations, because it has no session to hold an advisory lock in; the Pool driver can.",
+        "evidence": "The @neondatabase/serverless documentation describes the HTTP function as for one-shot queries sent over fetch, with \"only one query at a time this way\", and states plainly that \"sessions and transactions are not supported\" — it offers only a non-interactive `sql.transaction([...])`. The Pool/Client WebSocket driver is the one that provides \"session or interactive transaction support\" and node-postgres compatibility. An advisory lock is session-scoped, so it is available only through the latter.",
+        "source": "https://github.com/neondatabase/serverless",
+        "confidence": 85,
+        "affects": "The choice of drizzle-orm/neon-serverless over neon-http, and the on-boot migration strategy."
+      },
+      {
+        "claim": "Next.js 16 makes Turbopack the default for dev and build, removes `next lint`, and no longer lints during `next build` — so a repository with empty typecheck and lint entries in verify is left with no linting at all unless its own verify command runs it.",
+        "evidence": "The version 16 upgrade guide: \"Starting with Next.js 16, Turbopack is stable and used by default with `next dev` and `next build`\"; and under Removals, for the `next lint` command: \"The `next lint` command has been removed. Use Biome or ESLint directly. `next build` no longer runs linting.\" .sdlc/config.yml has verify.typecheck, verify.lint, verify.build and verify.e2e all empty, with only verify.unit set to `npm run sdlc:verify`.",
+        "source": "https://nextjs.org/docs/app/guides/upgrading/version-16 and first-party: .sdlc/config.yml",
+        "confidence": 95,
+        "affects": "The composition of sdlc:verify, and the conventions entry making tsc and eslint explicit steps."
+      },
+      {
+        "claim": "Next.js 16 requires async access to cookies(), headers() and params, and has renamed middleware.ts to proxy.ts with a Node.js-only runtime.",
+        "evidence": "The upgrade guide: \"Starting with Next.js 16, synchronous access is fully removed. These APIs can only be accessed asynchronously\", listing cookies, headers, draftMode, params and searchParams; and \"The `middleware` filename is deprecated, and has been renamed to `proxy`... The `edge` runtime is NOT supported in `proxy`. The `proxy` runtime is `nodejs`, and it cannot be configured.\" It also states minimums of Node 20.9 and TypeScript 5.1.",
+        "source": "https://nextjs.org/docs/app/guides/upgrading/version-16",
+        "confidence": 95,
+        "affects": "conventions — where a request-scoped authorisation check belongs — and the invariants about server-side authorisation."
+      },
+      {
+        "claim": "@electric-sql/pglite is not on Next.js's automatic server-external list, so it has to be named in serverExternalPackages or the WASM Postgres will be bundled and fail.",
+        "evidence": "The serverExternalPackages reference lists the packages Next opts out of server bundling by default; the list includes argon2, bcrypt, better-sqlite3, pg, @prisma/client and @node-rs/argon2, and does not include @electric-sql/pglite. The page describes the option as opting a dependency out of bundling \"and use native Node.js require\".",
+        "source": "https://nextjs.org/docs/app/api-reference/config/next-config-js/serverExternalPackages",
+        "confidence": 90,
+        "affects": "conventions, and the first ticket's next.config.ts."
+      },
+      {
+        "claim": "OWASP accepts scrypt as an approved password KDF immediately behind Argon2id, at N = 2^17, r = 8, p = 1.",
+        "evidence": "The Password Storage Cheat Sheet orders the options Argon2id (preferred), scrypt (\"use when Argon2id is unavailable\"), bcrypt (legacy systems only, passwords limited to 72 bytes) and PBKDF2-HMAC-SHA-256 (FIPS-140 only), and states for scrypt: \"use a CPU/memory cost parameter (N) of 2^17, a block size (r) of 8 (1,024 bytes), and a parallelization parameter (p) of 1\". The page does not name Node's crypto implementation specifically, so the mapping from that guidance to crypto.scrypt is this brief's judgement, not the page's.",
+        "source": "https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html",
+        "confidence": 80,
+        "affects": "The password hashing decision, and therefore the decision to take no native dependency at all."
+      },
+      {
+        "claim": "TypeScript 7.0.2 is the current latest, but typescript-eslint's peer range excludes it, so the project must pin TypeScript 5.9 to keep type-aware linting installable.",
+        "evidence": "`npm view typescript dist-tags` returns `latest: 7.0.2`. `npm view typescript-eslint@8.71.0 peerDependencies` returns `{ eslint: \"^8.57.0 || ^9.0.0 || ^10.0.0\", typescript: \">=4.8.4 <6.1.0\" }`, which 7.0.2 does not satisfy. The published 5.x line ends at 5.9.3, inside the range.",
+        "source": "first-party: npm registry, queried directly for typescript and typescript-eslint",
+        "confidence": 95,
+        "affects": "stack.choice and the version-pin decision."
+      },
+      {
+        "claim": "Prisma cannot be used without an edit to a path no agent may change, because its engines are fetched by a postinstall hook and ci-verify installs with scripts disabled.",
+        "evidence": "`@prisma/engines` declares `\"postinstall\": \"node scripts/postinstall.js\"` in its published manifest. The repository's own CI workflow states: \"Install scripts are not run. This job's verdict is the PR's checks, and a dependency's postinstall runs before every one of them\", and its error message directs a project that needs one to \"run it by name in verify.prepare in .sdlc/config.yml\" — a file listed under forbidden_paths in that same config.",
+        "source": "first-party: npm registry manifest for @prisma/engines, and .github/workflows/ci-verify.yml",
+        "confidence": 90,
+        "affects": "The ORM decision, and the rejected stack entry for Prisma."
+      },
+      {
+        "claim": "@types/node's current latest line targets Node 26 while ci-verify runs Node 22, so the types must be pinned to the 22.x line to match the runtime.",
+        "evidence": "`npm view @types/node version` returns 26.6.3; the 22.x line exists and currently ends at 22.20.4. `.github/workflows/ci-verify.yml` pins `node-version: 22` in both of its jobs.",
+        "source": "first-party: npm registry, and .github/workflows/ci-verify.yml",
+        "confidence": 90,
+        "affects": "conventions and the exact version pins in stack.choice."
+      }
+    ],
+    "rejected_sources": [
+      "Blog and newsletter comparisons of PGlite against other embedded databases (kanopylabs, pkgpulse, the PGlite Hacker News thread). They compare feature matrices and benchmarks, none of which bears on the two questions here — whether it installs without a script, and whether a second process can open its data directory — and the two first-party sources that answer those are cited instead.",
+      "Vercel's 'Vercel with Neon Postgres' template and the broad 'what replaced Vercel Postgres' blog posts. The template is a starting point whose dependency choices would have been made for its own reasons, and the blogs restate the deprecation the package's own manifest already states authoritatively.",
+      "Search-engine summaries of current versions. Every version in this brief was read from the npm registry directly, because the summaries disagreed about release dates and one reported a 2024 build step as current."
+    ]
+  },
+  "assumptions": [
+    {
+      "assumption": "A Next.js 16.3 application builds and boots with PGlite 0.5.8 behind `serverExternalPackages`, under Turbopack, on Node 22.",
+      "basis": "PGlite is documented as running on Node with no install step, and serverExternalPackages is the documented way to keep a WASM-backed package out of the server bundle. None of it has been run in this repository, which has no code.",
+      "if_wrong": "The first ticket fails at `next build` or at first query, and the cost is one ticket of diagnosis rather than a redesign — the alternative backends all remain available. This is the single most likely thing to be wrong in this brief.",
+      "validate_by": "On the skeleton ticket, run `next build && next start` with DATABASE_URL unset and assert GET /api/health returns 200 before writing anything else. Half a day, and it is the first thing the first ticket does."
+    },
+    {
+      "assumption": "ESLint 10 in flat config works with @next/eslint-plugin-next and typescript-eslint 8.71 together, and the rules can be kept to a small, stable set.",
+      "basis": "The Next.js 16 upgrade guide says @next/eslint-plugin-next \"now defaults to ESLint Flat Config format, aligning with ESLint v10\", and typescript-eslint 8.71 declares a peer range including `^10.0.0`. No repository has run the combination.",
+      "if_wrong": "Every pull request is red on lint configuration rather than on product code, and QA spends its runs on the toolchain. It is contained — removing or downgrading the linter touches package.json and one config file — but it recurs on every PR until it is fixed, so it is the second thing the skeleton ticket should settle.",
+      "validate_by": "Lint one file on the skeleton ticket, with one type-aware rule enabled, and confirm `sdlc:verify` runs all three stages green."
+    },
+    {
+      "assumption": "A Vercel project can be connected to this repository and a Neon database provisioned, by a human, before the build reaches its deploy step.",
+      "basis": "The issue says the product is to be live on Vercel, and the spec names Vercel and Neon. Nothing in the repository provisions either, and the repository is not connected to any Vercel project today.",
+      "if_wrong": "Everything up to the deploy step is built and proven by CI and QA, and the product never reaches real users — the whole point of the issue. This is the failure mode that cannot be engineered around, because both steps need credentials only the owner has.",
+      "validate_by": "Ask the maintainer to connect the Vercel project and provision Neon now, not at the end; the answer is one word and it changes what the deploy guide can say."
+    },
+    {
+      "assumption": "The Neon Pool driver, held as a module-level singleton on the Vercel Node.js runtime, opens a WebSocket connection per instance and reconnects after a cold start without application-level handling.",
+      "basis": "The @neondatabase/serverless documentation shows Pool and Client as the node-postgres-compatible WebSocket drivers, and the Neon-on-Vercel setup uses the Node.js runtime rather than Edge. The documentation's warning about not reusing a Pool across requests is addressed to Edge functions, whose WebSocket cannot outlive one request.",
+      "if_wrong": "Database calls fail intermittently in production only — the worst place to discover it, and invisible to CI and to QA in compose mode, since QA runs PGlite. The fix is contained to src/db/client.ts.",
+      "validate_by": "Open a preview deployment against a Neon branch and exercise the group screens, before the product has real users. This cannot be settled by any test in this repository."
+    },
+    {
+      "assumption": "`next build` does not need a reachable database, so the build is reproducible with no secrets set.",
+      "basis": "Every page reads a session or a dynamic [groupId] param, and Next.js 16 does not prerender those by default without generateStaticParams. If a later ticket makes a page static and database-backed, the in-process PGlite covers the build when DATABASE_URL is unset.",
+      "if_wrong": "A build fails in CI for want of a database, or — worse — a Vercel build with a production DATABASE_URL set runs against production during prerender, which can write.",
+      "validate_by": "Run `next build` with no environment variables set, on the skeleton ticket, and confirm it succeeds."
+    },
+    {
+      "assumption": "Running the local database entirely in memory is acceptable everywhere except `npm run dev`, because nothing durable is ever expected of it.",
+      "basis": "CI and QA seed their own fixtures on every run, and production uses Neon. PGLITE_DATA_DIR turns on file persistence for anyone who wants a local database that survives a restart.",
+      "if_wrong": "A developer loses local work between restarts, or QA's seed silently re-seeds a database it was meant to keep — both confusing, neither expensive, and both visible immediately.",
+      "validate_by": "None needed; the failure is loud and cheap, and PGLITE_DATA_DIR is the documented escape hatch."
+    },
+    {
+      "assumption": "The ten non-goals in the spec's 'Not in this version' section will not be reopened during the build, and the schema can absorb them without a rewrite if they are.",
+      "basis": "The spec states them explicitly and says the design should not make them hard. They are additive: a currency on the expense row, an attachment table, a recurrence column, a rate table, a reset-token table. None of them changes a table's key or a stored amount.",
+      "if_wrong": "Password reset and account deletion are the two that touch the auth design most directly, and both are the kind of thing a user asks for early. Both add a column or a table; neither requires changing how a session is stored.",
+      "validate_by": "None needed. The brief only needs the non-goals to be written down, which is what the coverage entries are for."
+    }
+  ],
+  "prd": {
+    "problem": "A group that shares money — a flat, a trip, a household — keeps its accounts in a group chat, a shared note or someone's memory, and the arithmetic goes wrong. Someone who was owed money forgets, or the group informally agrees that the last two small amounts do not matter and stops keeping score. The result is not a wrong number so much as an unsettled relationship: people avoid raising it, and the expenses keep accumulating anyway. The specific failure this product addresses is that there is no cheap, trustworthy way for a group to record what was actually paid, see who owes whom without doing arithmetic in a chat window, and know that the answer is final — that the split is exact, that the number has not changed since the money was spent, and that settling up is recorded rather than remembered.",
+    "users": [
+      {
+        "who": "Flatmates sharing rent, bills and groceries",
+        "context": "Monthly, on a phone, at a kitchen table or in a group chat, adding an expense within a day or two of it happening and checking balances occasionally in between.",
+        "pain": "Rent and utilities dominate the ledger and everything else is small and messy. Nobody wants to chase a flatmate for the 40 units of groceries, and nobody trusts a number they cannot reproduce.",
+        "sophistication": "Low. They will use it because it is in the chat they already use, not because it is powerful. Every screen has to work on a phone with one hand."
+      },
+      {
+        "who": "A group on a trip",
+        "context": "A week or two away, several people, some of whom have never met each other, often with a mix of currencies paid on the way and one settled in the middle.",
+        "pain": "The group forms and dissolves fast, and the trip is over before anyone reconciles. Adding a member after money has been spent is normal, and nobody wants to hand-enter a spreadsheet.",
+        "sophistication": "Low to moderate. They need the trip recorded as it happens and a clear answer at the end, and they do not need it to be pretty — they need it to be finished."
+      },
+      {
+        "who": "One person keeping track for a couple or a small shared project",
+        "context": "Occasionally, on a laptop, reconciling a period after the fact, sometimes for someone else.",
+        "pain": "They are the only one who cares about the arithmetic, which is exactly the arrangement that makes the other person never learn where the money went. It has to be legible to the person who is not keeping track.",
+        "sophistication": "Moderate. They will look at the balances and the feed to explain a number to someone else, so the explanation has to be on the screen and not in their head."
+      }
+    ],
+    "jobs": [
+      "Record an expense while it is still fresh — what it was, how much, who paid and how it splits — in under a minute on a phone, without asking anyone first.",
+      "See, at a glance, what I owe and what I am owed in total and per person, without doing arithmetic or asking anyone.",
+      "Settle up in the fewest transfers the group can manage, record the payment, and have both sides' balances move at once.",
+      "Add someone who is not here yet — by link, or by name before they have an account — so the trip can be recorded before everyone signs up.",
+      "Trust the number: know that a split is exact, that it has not changed since the expense was entered, and that who can see it is deliberate.",
+      "Find one expense from three months ago without scrolling, by who was involved, what it was categorised as, or what it was called."
+    ],
+    "scope": [
+      "Phase 1 — the application skeleton on Vercel's shape, the database layer (PGlite locally, Postgres in production) with migrations, accounts and sessions, and the health endpoint.",
+      "Phase 2 — groups: create, invite links, placeholder members and claiming, roles, leave and remove.",
+      "Phase 3 — expenses with multiple payers, all four split types, categories, edit and delete.",
+      "Phase 4 — balances, simplified debts and settle-up with partial payments; balances across groups on the home screen.",
+      "Phase 5 — the activity feed, search and filters, the seed, and the README's deploy guide."
+    ],
+    "non_goals": [
+      "Password reset and account deletion. Both need an outbound email channel, which is a delivery dependency, a domain reputation problem and a new failure mode — a much larger surface than the feature it serves, and the group can work around a forgotten password for the length of a trip. Session revocation and signing out are real and are built.",
+      "Paying through the app, whether by UPI or card. The app records a payment; it does not move money. Taking payment means a merchant account, PCI scope, webhook reconciliation and a second, much more dangerous authorisation model, none of which the product needs to be useful.",
+      "Receipt photos and scanning. Storage, image resizing, an upload surface and OCR are a project of their own. The description field carries the information the product actually needs.",
+      "Recurring expenses. A monthly rent that has to be re-entered every month is friction, but recurrence interacts with editing, deleting and the activity feed in ways that are cheap to add later and expensive to get right before the data model exists.",
+      "Multiple currencies inside one group, and exchange rates. A group with one currency is what a group has; a conversion table is a rate source, a rounding policy for converted values and an audit question, and it undermines the one property the product is selling, that a balance is exact.",
+      "Charts and spending reports. The question a user actually asks is 'who owes whom', which is a number, not a picture. Charts also imply history and categories at a depth the feed does not yet have.",
+      "Native mobile apps. The product is mobile-first and responsive; a web app that works on a phone reaches the user sooner and costs nothing to distribute, and it is the reason the whole thing is one Next.js application.",
+      "Email notifications. Nothing in the product is time-critical enough to interrupt someone about, and an email channel brings deliverability, unsubscribe handling and a queue."
+    ],
+    "success": [
+      {
+        "metric": "A single expense is recorded, start to finish, without leaving one screen",
+        "target": "under 60 seconds on a 360px-wide viewport, with no horizontal scrolling and no keyboard required",
+        "how_measured": "QA times the flow on the seeded group; the form's step count is asserted in a QA run."
+      },
+      {
+        "metric": "A split is exact — the parts always sum to the whole",
+        "target": "0 discrepancies across 10,000 randomly generated splits, including totals of 1 minor unit split three ways",
+        "how_measured": "A property test over random totals, member counts and split types, run in CI."
+      },
+      {
+        "metric": "The main screens load fast enough to feel immediate",
+        "target": "p75 under 1 second for home, group, expenses and balances on an ordinary connection",
+        "how_measured": "Timing recorded in the QA report against the production build booted in compose mode."
+      },
+      {
+        "metric": "A person can answer 'who owes whom' without scrolling further than one screen",
+        "target": "the group balance screen shows every member's net balance and the full transfer list with no scrolling at 360px and none at 1280px",
+        "how_measured": "QA check on the group screen at both widths."
+      },
+      {
+        "metric": "The pipeline's browser QA finds product defects, not infrastructure ones",
+        "target": "at least 80% of issues QA files in the first ten tickets are product defects, and none is a boot, seed or readiness failure",
+        "how_measured": "The issues QA files during the first ten tickets, classified by hand."
+      },
+      {
+        "metric": "A new contributor can run it and deploy it from the README alone",
+        "target": "one command to run locally and a complete Vercel deploy guide, verified by following both on a clean machine",
+        "how_measured": "A human follows the README on a fresh checkout with no prior context."
+      }
+    ],
+    "constraints": [
+      "The spec's hard constraints are binding: TypeScript and one Next.js App Router application on Vercel, Postgres with a PGlite fallback and zero local setup, authorisation on the server for every read and write, exact money, and secrets only from environment variables.",
+      "The SDLC pipeline in .sdlc/ is the delivery mechanism: it installs with --ignore-scripts, runs `npm run sdlc:verify` before any agent sees a diff, boots the app with `npm run sdlc:serve` for QA in compose mode on port 3000, and seeds it with `npm run sdlc:seed` through localhost only. Anything that breaks one of those breaks every ticket.",
+      "The agents downstream read only this brief and a diff. A decision not written here will be re-made per ticket, differently each time, by agents that cannot see one another."
+    ]
+  },
+  "trd": {
+    "requirements": [
+      {
+        "id": "TR-1",
+        "requirement": "Every read and write of a group's data is authorised on the server against the session that is asking, expressed as a membership join inside the query itself. A non-member receives 404 and no data; an unauthenticated request is redirected to sign-in.",
+        "rationale": "The spec requires that every read and write of a group's data is checked on the server against who is asking, and that a user sees only the groups they belong to. Expressing authorisation in the query rather than as a separate check means a call site cannot forget it, which is the way this class of bug is actually introduced.",
+        "priority": "must",
+        "verified_by": "Integration test: a second user requesting a group they do not belong to gets 404 on every read route and no row is written by any action. A request with no session redirects.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-4"
+        ]
+      },
+      {
+        "id": "TR-2",
+        "requirement": "Every amount is a bigint count of minor units from the database column to the formatted string. No float is ever assigned to, stored in, or returned for a money value, and a money-typed value cannot be given a number without a type error.",
+        "rationale": "The spec makes money exact end to end, never floats. A float would make a 0.1 split inexact in a way that is invisible until two people's balances disagree by one paisa and neither can say why.",
+        "priority": "must",
+        "verified_by": "A lint or type rule making number unassignable to a money type, and a property test asserting every computed amount is an integer.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-3",
+        "requirement": "The parts of every split sum exactly to the expense total. Exact-amount splits that do not sum to the total and percentage splits that do not sum to 100 are rejected, with the error naming what is off and by how many minor units. Equal, percentage and share splits assign their entire floor-division remainder to the first payer in the split's member order, and the sum is asserted before the write commits.",
+        "rationale": "The spec requires each split type to be validated with an error naming what is off and by how much, and requires the remainder rule to be stated and tested so the parts always sum to the whole. This is the requirement the whole product's trustworthiness rests on.",
+        "priority": "must",
+        "verified_by": "Unit tests over all four split types including a 1-minor-unit total split three ways and a total of 7 units split four ways, plus property tests over 10,000 random totals asserting the sum invariant and the stated recipient of the remainder.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-5"
+        ]
+      },
+      {
+        "id": "TR-4",
+        "requirement": "A member's net balance in a group equals their total paid minus their total share, summed from the stored expense_payer and expense_share rows alone; a balance is never derived from the expense's stored split rule. Editing or deleting an expense replaces that expense's stored payer and share rows in the same transaction that writes its activity entry, so balances move by exactly the difference the replacement makes, and no balance changes except through a write to that expense or to a payment. A change to the split algorithm or to the rounding rule never re-evaluates stored history: an expense keeps the shares it was written with until somebody edits or deletes it.",
+        "rationale": "The spec requires balances to follow from what was recorded, requires a member's records to become theirs when they claim a placeholder, and requires every expense to be editable and deletable. Those together mean an edit is a legitimate change to the ledger: the stored rows are the ledger, replacing them is the edit, and the difference is what balances move by. Storing the split rule as well is what lets the edit form reopen showing exactly what was entered, and it is kept out of the balance path so that a later change to how splits are computed cannot restate what people already owed — which is the one thing this product must never do.",
+        "priority": "must",
+        "verified_by": "Integration test: record an expense with two payers and an equal split, then edit its amount, payers, participants and split type in one save; assert every member's balance moved by exactly the difference implied by the replacement rows, that exactly one activity entry was written naming each of amount, payers, participants and split type, and that reopening the edit form shows the inputs exactly as saved. A second test changes the rounding rule and asserts every stored balance is byte-identical before and after.",
+        "sources": [
+          "S-1",
+          "S-5",
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-5",
+        "requirement": "An expense records one payer or several, and where there are several each payer's part is stored and the parts sum exactly to the expense total; a set of parts that does not sum is rejected with the discrepancy named in minor units.",
+        "rationale": "The spec requires several members each paying part, with the parts summing to the total, and a multi-payer expense is explicitly required in the QA seed.",
+        "priority": "must",
+        "verified_by": "Unit and integration tests for a single payer, two payers summing to the total, and two payers that do not.",
+        "sources": [
+          "S-5"
+        ]
+      },
+      {
+        "id": "TR-6",
+        "requirement": "Simplified debts are produced by greedy largest-creditor against largest-debtor matching over the per-member net balances. The result sums to zero, uses at most n − 1 transfers where n is the number of members with a non-zero balance, and is deterministic: the same balances always yield the same transfers.",
+        "rationale": "The spec asks for the fewest payments the algorithm achieves and asks us to state which algorithm and what it guarantees. The true minimum is a subset-sum partition and is not solvable in polynomial time, so the guarantee stated is the one greedy actually provides, and it is stated rather than implied.",
+        "priority": "must",
+        "verified_by": "Unit tests including a six-member fixture with a known answer, asserting the transfer count, that the transfers reproduce the net balances exactly, and that two runs on the same balances produce identical output.",
+        "sources": [
+          "S-1",
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-7",
+        "requirement": "A payment is a first-class record from one member to another, in full or in part, that moves both balances by its amount, appears in the group's feed, and can be deleted only by one of the two members it involves — after which the balances it moved are restored.",
+        "rationale": "The spec requires settle-up with full and partial payments, requires a payment to move the balances and appear in the feed, and restricts deletion to the members involved. Restoring the balances on delete is the part that makes the feed and the money agree.",
+        "priority": "must",
+        "verified_by": "Integration test recording a partial payment, asserting both balances moved by exactly its amount, then deleting it as an involved member and asserting both balances return; asserting a third member is refused the delete.",
+        "sources": [
+          "S-1",
+          "S-6",
+          "S-7"
+        ]
+      },
+      {
+        "id": "TR-8",
+        "requirement": "The home screen reports what the signed-in user owes and is owed in total and per person, across every group they are an active member of, and those totals equal the sum of the per-group balances.",
+        "rationale": "The spec requires the across-groups view on the home screen, and a total that disagrees with the groups it summarises is worse than no total.",
+        "priority": "must",
+        "verified_by": "Integration test across a user in three groups, asserting the total equals the sum of the per-group net balances to the minor unit, and excluding a group the user has been removed from.",
+        "sources": [
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-9",
+        "requirement": "A group in which every member's balance is zero says so plainly, on the group balance screen and on the group overview, rather than showing an empty transfer list.",
+        "rationale": "The spec requires this explicitly, and it is the screen a group visits most often at the end of a trip, when the answer is 'you are done'.",
+        "priority": "must",
+        "verified_by": "QA, plus a component test rendering the group screen against a settled fixture and asserting the settled state is present.",
+        "sources": [
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-10",
+        "requirement": "Sign-up and sign-in with email and password. The password is stored only as a salted scrypt hash; the session is an opaque random token in an httpOnly, Secure, SameSite=Lax cookie whose SHA-256 is the only thing persisted; signing out deletes the session row on the server and clears the cookie. Sessions expire and a signed-out session does not work even if the cookie is replayed.",
+        "rationale": "The spec requires email and password, a slow salted hash, secure httpOnly cookies, and signing out ending the session on the server. Hashing the token at rest means a database disclosure does not hand over live sessions.",
+        "priority": "must",
+        "verified_by": "Integration test asserting the raw cookie token appears nowhere in the database, that signing out then replaying the cookie is unauthenticated, and that an expired session is refused.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-3"
+        ]
+      },
+      {
+        "id": "TR-11",
+        "requirement": "Failed sign-ins are rate-limited per account and per source address, and the status and response body for an unknown email are byte-identical to those for a wrong password, including when the request is rate-limited.",
+        "rationale": "The spec requires rate limiting and requires that error messages never reveal whether an email is registered. A limit that distinguishes the two cases is an enumeration oracle however carefully the message is worded.",
+        "priority": "must",
+        "verified_by": "Test comparing the two responses byte for byte, and asserting the sixth failed attempt in the window is refused while a correct password on the seventh is accepted.",
+        "sources": [
+          "S-3"
+        ]
+      },
+      {
+        "id": "TR-12",
+        "requirement": "A profile holds a display name and a default currency, both editable, and the default currency is the currency a group the user creates is created in.",
+        "rationale": "The spec requires a profile of exactly these two things, and the default currency is what makes group creation one field fewer on the common path.",
+        "priority": "must",
+        "verified_by": "Integration test: change the default currency, create a group, assert its currency; change the display name, assert it appears wherever the user is shown.",
+        "sources": [
+          "S-3",
+          "S-4"
+        ]
+      },
+      {
+        "id": "TR-13",
+        "requirement": "A group has a name, a currency and an optional type (trip, home, couple, other). Exactly one member is the owner. Only the owner may rename the group, remove a member, or archive it. A member whose balance is non-zero may not leave or be removed, and a user sees only the groups they belong to.",
+        "rationale": "The spec states each of these, and the balance precondition is the one that keeps a group's arithmetic intact — removing someone mid-settlement would leave a debt attributed to a person who is no longer in the group.",
+        "priority": "must",
+        "verified_by": "Integration test matrix over owner and member roles for each of the four operations, and over leaving and being removed with a zero and a non-zero balance.",
+        "sources": [
+          "S-1",
+          "S-4"
+        ]
+      },
+      {
+        "id": "TR-14",
+        "requirement": "An invite link lets any signed-in user join the group. Opening a join link twice is a no-op rather than a second membership. The owner can disable the link, or rotate it, and rotation invalidates the previous token immediately.",
+        "rationale": "The spec requires invite by link, joining by opening it, turning the link off, and making a new one that kills the old. The idempotence matters because people refresh and re-share links.",
+        "priority": "must",
+        "verified_by": "Integration test: open a link twice, assert one membership; rotate, assert the old token is rejected and the new one works; disable, assert the token is rejected.",
+        "sources": [
+          "S-4"
+        ]
+      },
+      {
+        "id": "TR-15",
+        "requirement": "A placeholder member can be created by name before having an account, so a trip can be recorded before everyone signs up. Claiming is atomic: when two people claim the same placeholder at once, exactly one succeeds and the other is told it is already claimed. Everything recorded against the placeholder belongs to the claimer from that point, and a placeholder that is already claimed cannot be claimed again.",
+        "rationale": "The spec requires placeholder members and that everything recorded for one becomes the claimer's. The race is the whole difficulty: without an atomic claim two people can end up sharing one placeholder's history, which is unrecoverable.",
+        "priority": "must",
+        "verified_by": "Integration test firing two concurrent claims and asserting one success and one conflict, then asserting the expenses recorded before the claim are attributed to the winner.",
+        "sources": [
+          "S-4"
+        ]
+      },
+      {
+        "id": "TR-16",
+        "requirement": "Removing a member ends their membership but keeps their stored shares and payer records, so every other member's balance is unchanged by the removal and the group's history still reads correctly.",
+        "rationale": "The spec allows a member to be removed once settled and requires the feed to record it. Discarding their records would restate everyone else's balance, which TR-4 exists to prevent.",
+        "priority": "must",
+        "verified_by": "Integration test comparing every member's balance immediately before and after a removal, and asserting the removed member's expense still appears in the group's list with them named.",
+        "sources": [
+          "S-4",
+          "S-6"
+        ]
+      },
+      {
+        "id": "TR-17",
+        "requirement": "Every mutation writes exactly one activity entry in the same transaction as the change: there is no state change without a feed entry, and no feed entry without the state change.",
+        "rationale": "The spec requires every change to be recorded in the feed with who made it and what changed. A feed written outside the transaction is the classic source of entries describing changes that were rolled back.",
+        "priority": "must",
+        "verified_by": "Integration test that forces a failure after the write and asserts no entry was written, and a test asserting exactly one entry per successful mutation across all mutation types.",
+        "sources": [
+          "S-1",
+          "S-5",
+          "S-7"
+        ]
+      },
+      {
+        "id": "TR-18",
+        "requirement": "Expenses list newest first by date, filter by member and by category, and search by description; a filter and a search compose, and an empty result set distinguishes 'no expenses match' from 'no expenses yet'.",
+        "rationale": "The spec requires the list newest first, filterable by member and category, and searchable by description. The distinction between no matches and no expenses is what stops the empty state looking like a bug.",
+        "priority": "must",
+        "verified_by": "Integration test over a seeded group asserting the ordering, each filter, the composition, and both empty variants; QA on the screen.",
+        "sources": [
+          "S-1",
+          "S-5"
+        ]
+      },
+      {
+        "id": "TR-19",
+        "requirement": "The activity feed exists per group and across all of a user's groups, records expense added, edited and deleted, payment recorded, and member joined, left or removed, each with the actor and the time, and is ordered newest first.",
+        "rationale": "The spec requires both feeds with these event kinds. The cross-group feed is what makes the product useful to someone who does not open each group.",
+        "priority": "must",
+        "verified_by": "Integration test performing each of the seven event types and asserting the feed contains each with actor and time in the right order, scoped correctly to a non-member.",
+        "sources": [
+          "S-1",
+          "S-7"
+        ]
+      },
+      {
+        "id": "TR-20",
+        "requirement": "GET /api/health executes a real query against the configured database and returns 200 with the round-trip time, or 503 naming the failure without leaking the connection string. It is what sdlc:ready polls.",
+        "rationale": "The spec requires a health endpoint that checks the database is reachable, and the pipeline's readiness poll needs an endpoint whose 200 actually means the app can serve a request. An endpoint that returns 200 without touching the database reports a healthy app that cannot answer anything.",
+        "priority": "must",
+        "verified_by": "Integration test asserting 200 and a positive round-trip time against a live database, and 503 when the database is unreachable. sdlc:ready exits 0 only on 200.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-9"
+        ]
+      },
+      {
+        "id": "TR-21",
+        "requirement": "With DATABASE_URL set the application uses that Postgres; with it unset it runs on an in-process PGlite. The same migration list is applied to both, on start in development and on deploy in production, behind a lock so that two concurrent cold starts cannot apply a migration twice. Applying the migrations to an up-to-date database is a no-op.",
+        "rationale": "The spec requires the PGlite fallback with zero local setup and the same migrations on both, applied automatically in development and on deploy. The lock is what makes 'on deploy' safe when several function instances start at once.",
+        "priority": "must",
+        "verified_by": "Integration test: run the migrator against a fresh in-memory PGlite, assert the schema exists, run it again and assert no migration is re-applied. The Neon path is covered by a preview deployment check, not by a test.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-9"
+        ]
+      },
+      {
+        "id": "TR-22",
+        "requirement": "In production a missing required environment variable stops startup with a message naming that variable. In development and CI, with nothing set, the application boots on documented local defaults and logs that it is doing so.",
+        "rationale": "The spec requires secrets only from environment variables, each documented in the README, with a loud failure in production and a safe, logged default elsewhere. Failing silently in production is how an app ships with a development secret.",
+        "priority": "must",
+        "verified_by": "Test asserting production boot fails naming the variable, and that a default boot logs which defaults it is using.",
+        "sources": [
+          "S-1",
+          "S-2",
+          "S-9"
+        ]
+      },
+      {
+        "id": "TR-23",
+        "requirement": "Every amount is rendered with the group's currency symbol, separators and fraction digits through Intl.NumberFormat, and is never rendered from a float. A negative balance is presented as a direction — you owe, or you are owed — not only as a minus sign.",
+        "rationale": "The spec requires correct symbol and separators, and a group that is owed money should read that way rather than as a negative number, which is the same number but the wrong story.",
+        "priority": "must",
+        "verified_by": "Snapshot test over a table of currencies including zero- and three-fraction-digit ones, and a component test asserting the direction wording for both signs.",
+        "sources": [
+          "S-1",
+          "S-8"
+        ]
+      },
+      {
+        "id": "TR-24",
+        "requirement": "Every page has exactly one h1 and a correct heading order, a label for every control, a visible focus ring, and is fully operable by keyboard. Empty, loading and error states are rendered for every screen that can reach them; a screen that cannot reach one says why in the brief rather than leaving it blank.",
+        "rationale": "The spec requires clean heading structure, labelled controls, keyboard access, visible focus, and designed empty, loading and error states. QA checks these on every screen, so a screen that has not decided them will be reported as a defect.",
+        "priority": "must",
+        "verified_by": "QA against the accessibility list in ui.accessibility, plus a component test per screen asserting its empty and error states render.",
+        "sources": [
+          "S-1",
+          "S-8"
+        ]
+      },
+      {
+        "id": "TR-25",
+        "requirement": "The home, group, expenses and balances screens respond in under one second at p75 on an ordinary connection, measured against the production build rather than the dev server.",
+        "rationale": "The spec requires the main screens to load in under a second on an ordinary connection. Measuring against `next dev` would measure the development compiler rather than the product, which is the measurement that always flatters.",
+        "priority": "should",
+        "verified_by": "Timing recorded in the QA report against the compose build; a regression over 1 second at p75 opens a bug.",
+        "sources": [
+          "S-1",
+          "S-8"
+        ]
+      },
+      {
+        "id": "TR-26",
+        "requirement": "npm run sdlc:seed creates, through the running application, a fixed set of users with known passwords, groups containing one expense of every split type, a multi-payer expense, payments, and an unclaimed placeholder member. Running it twice produces the same state, and it refuses to run in production.",
+        "rationale": "The spec requires exactly this seed for development and for QA, and QA must never touch real records. Idempotence is what makes a QA run reproducible and what makes a failed run recoverable by re-seeding.",
+        "priority": "must",
+        "verified_by": "Integration test seeding twice and comparing the resulting rows, and asserting the endpoint refuses when NODE_ENV is production.",
+        "sources": [
+          "S-1",
+          "S-9"
+        ]
+      },
+      {
+        "id": "TR-27",
+        "requirement": "The README documents every environment variable with its purpose and whether it is required, one command to run the application locally with nothing installed, and the Vercel deploy from scratch: which database to add, which variables to set, and how migrations run.",
+        "rationale": "The spec requires the README to say how to run it locally in one command and how to deploy to Vercel from scratch. The secret requirement names the README as the place variables are documented, and this brief adds a ticket nobody would otherwise write.",
+        "priority": "must",
+        "verified_by": "A human follows both on a clean machine; the reviewer checks the README against the variables the code actually reads.",
+        "sources": [
+          "S-1",
+          "S-9"
+        ]
+      }
+    ],
+    "data_model": [
+      {
+        "entity": "user",
+        "holds": "An account: id, lowercased unique email, password hash, display name, default currency, created_at.",
+        "keys": "Primary key id (UUID). Unique index on lower(email)."
+      },
+      {
+        "entity": "session",
+        "holds": "A live sign-in: id, user_id, the SHA-256 of the session token, created_at, expires_at, and the moment it was revoked.",
+        "keys": "Primary key id. Unique index on token_hash. Index on user_id. The raw token is never stored.",
+        "notes": "Deleting the row is what ends the session on the server; clearing the cookie alone would not."
+      },
+      {
+        "entity": "login_attempt",
+        "holds": "A failed sign-in for rate limiting: a key that is the hash of the email and source address together, the window it falls in, and the count.",
+        "keys": "Primary key on the key. Database-backed rather than in memory, because a per-instance counter resets on every Vercel cold start and bounds nothing."
+      },
+      {
+        "entity": "group",
+        "holds": "A shared expense group: id, name, currency, optional type, owner_user_id, archived_at, and the invite link's token and whether it is enabled.",
+        "keys": "Primary key id. Unique index on invite_token where not null. Exactly one owner_user_id, which is also a member row."
+      },
+      {
+        "entity": "member",
+        "holds": "One person's place in a group: id, group_id, user_id (null while the member is a placeholder), display_name, role, and removed_at.",
+        "keys": "Primary key id. Partial unique index on (group_id, user_id) where user_id is not null, so a user cannot join twice and a placeholder is not a membership collision.",
+        "notes": "Removal sets removed_at rather than deleting the row. The shares and payer records that point here stay, which is what keeps other members' balances correct."
+      },
+      {
+        "entity": "expense",
+        "holds": "Something that was paid for: id, group_id, description, amount_minor, the group's currency carried on the row, split_type (equal, exact, percentage or shares), optional category and note, the date it happened, who created it, and created_at, updated_at, deleted_at.",
+        "keys": "Primary key id. Indexed on (group_id, date desc) for the list, and on description for search.",
+        "notes": "split_type names the rule that was entered and the per-member inputs are in expense_split_input; the amounts that rule produced are in expense_share, and those are the only two tables a balance reads. Both rule-shaped tables are replaced wholesale when the expense is edited."
+      },
+      {
+        "entity": "expense_payer",
+        "holds": "One member's part of an expense's total: expense_id, member_id, amount_minor.",
+        "keys": "Composite primary key (expense_id, member_id). The parts sum exactly to the expense total."
+      },
+      {
+        "entity": "expense_share",
+        "holds": "One member's resulting share of an expense: expense_id, member_id, amount_minor, computed once when the expense is written.",
+        "keys": "Composite primary key (expense_id, member_id). The shares sum exactly to the expense total.",
+        "notes": "Together with expense_payer this is the whole ledger: a balance is a sum over these rows and is never a re-evaluation of the stored split rule. An edit replaces both sets of rows in one transaction rather than adjusting them."
+      },
+      {
+        "entity": "expense_split_input",
+        "holds": "One member's place in the split, with the number that member was given: expense_id, member_id and input_value. The row's existence is the record that this member was included in the split.",
+        "keys": "Composite primary key (expense_id, member_id). input_value is minor units for an exact split, hundredths of a percent for a percentage split and a plain count for a shares split, because the unit is fixed by the expense's split_type; it is null for an equal split, where the only stored input is membership.",
+        "notes": "Written and replaced with the expense; never read to compute a balance. It exists so the edit form reopens showing exactly what was entered — which members were included, in what order, and the numbers typed for them — and so an edit's activity entry can name which of amount, payers, participants and split type changed. A member removed from a split has their row deleted, not zeroed."
+      },
+      {
+        "entity": "payment",
+        "holds": "A recorded settlement: id, group_id, from_member_id, to_member_id, amount_minor, optional note, who recorded it, created_at, deleted_at.",
+        "keys": "Primary key id. Indexed on group_id. Both members are group members; the payment moves both balances by its amount."
+      },
+      {
+        "entity": "activity",
+        "holds": "One entry in the feed: id, group_id, actor_user_id, kind, subject_type, subject_id, a jsonb detail of what changed, created_at.",
+        "keys": "Primary key id. Indexed on (group_id, created_at desc) and on (actor scope, created_at desc) for the cross-group feed.",
+        "notes": "Written in the same transaction as the change it describes, always through src/lib/activity.ts. An expense-edited entry names each field that moved — amount, payers, participants, split type — with its old and new value, comparing the stored rule rows (split_type and expense_split_input) against the amounts, and omits the fields that did not change."
+      },
+      {
+        "entity": "drizzle migrations",
+        "holds": "The applied-migration history, maintained by drizzle-kit's migrator, in the same database whichever backend is configured.",
+        "keys": "The table drizzle-kit creates and manages. Applying the list to an up-to-date database is a no-op."
+      }
+    ],
+    "interfaces": [
+      {
+        "name": "GET /api/health",
+        "shape": "Returns 200 with { status: 'ok', database: 'ok', latencyMs: number } after executing a real query, or 503 with { status: 'error', database: 'error', message: string }. The message names the failure and never contains the connection string.",
+        "errors": "503 when the database does not answer within the timeout. The endpoint never throws: an unreachable database is a reported 503, not a 500, because the caller is a poll and a 500 reads as an application bug.",
+        "idempotency": "A read. Safe to call as often as the poll does."
+      },
+      {
+        "name": "POST /api/dev/seed",
+        "shape": "Rebuilds the fixture set and returns { ok: true, users: [{ email, password }], groups: n }. Takes no parameters; the fixture set is fixed in the repository so that every run is the same run.",
+        "errors": "409 with a message when the request does not come from localhost, and 403 with the variable name when NODE_ENV is production — the guard is a security requirement, not a convenience, because this endpoint writes.",
+        "idempotency": "Yes, by resetting: it truncates and rebuilds rather than appending, so seeding twice gives the same state and a failed QA run is recovered by re-seeding."
+      },
+      {
+        "name": "scripts/seed.mjs",
+        "shape": "The command sdlc:seed runs. Waits for GET /api/health, then POSTs to /api/dev/seed and prints the fixture credentials on success. Written in plain JavaScript so it runs under a clean node with no build step.",
+        "errors": "Non-zero exit with the endpoint's message, which is what makes a failed seed visible in the QA boot log rather than a silent empty database.",
+        "idempotency": "Delegates to the endpoint, which is idempotent."
+      },
+      {
+        "name": "src/lib/auth.requireUser()",
+        "shape": "The module boundary every page and every Server Action calls first. Returns the signed-in user, or redirects to sign-in. Takes no arguments on purpose: a caller cannot supply a user id and so cannot act as someone else.",
+        "errors": "Redirects to sign-in when there is no valid session. Throws nothing for an expected case.",
+        "idempotency": "A read. Cheap enough to call on every render; it is one indexed lookup on a hashed token."
+      },
+      {
+        "name": "src/lib/access.requireMember(groupId)",
+        "shape": "The authorisation boundary for group data. Returns the caller's membership row, or 404. The membership join is expressed in the same query that reads the group's rows, so there is no window between the check and the read.",
+        "errors": "404, not 403, when the caller is not a member: whether a group exists is itself information. 403 only when the caller is a member and the action is the owner's alone.",
+        "idempotency": "A read."
+      },
+      {
+        "name": "src/lib/money",
+        "shape": "The module boundary for money. parseMajorUnits(text, currency) to bigint minor units, formatMinorUnits(bigint, currency) to a display string, and split(amount, type, participants) returning the per-member bigint shares and the remainder recipient, or a typed validation error naming the discrepancy.",
+        "errors": "Returns typed errors rather than throwing, so a Server Action can render a split error next to the field that caused it and can name the exact shortfall in minor units.",
+        "idempotency": "A pure function. No database, no clock, no randomness."
+      },
+      {
+        "name": "src/lib/balances",
+        "shape": "netBalances(members, payers, shares) returning a bigint per member, and simplifyDebts(balances) returning the ordered transfers greedy produces. Both take data in and return data; neither touches the database, so both are directly testable and neither is reachable from a request without going through access.requireMember first.",
+        "errors": "simplifyDebts throws on balances that do not sum to zero, which is a programming error rather than a user error and must never reach a user as a 500 — the integration test asserts the sum before it is called.",
+        "idempotency": "A pure function of its arguments, and deterministic for a given set of balances."
+      }
+    ],
+    "nfrs": [
+      "The home, group, expenses and balances screens respond in under 1 second at p75 on an ordinary connection, measured against the production build.",
+      "GET /api/health returns within 300ms at p95 with a warm database, and within 2 seconds when the database is unreachable — a health check that hangs is a health check that lies.",
+      "A sign-in performs exactly one scrypt derivation (N = 2^17, r = 8, p = 1) and no more, costing roughly a quarter second and 128 MB at peak, which is what the rate limiter bounds.",
+      "No request path issues more than one authorisation query, and that query is the one that fetches the data — there is no separate check-then-fetch pattern anywhere in src/app.",
+      "No float is ever assigned to a money value, enforced by a lint rule rather than by review.",
+      "The application writes nothing to local disk in production: the only durable state is the configured database.",
+      "Every mutation is a single transaction, so a partially applied change is not a state the product can be in.",
+      "The whole dependency tree installs and typechecks with install scripts disabled, which is what the repository's CI does to every pull request.",
+      "The application runs only on the Node.js runtime, never the Edge runtime, because the database Pool is a process-level singleton."
+    ]
+  },
+  "ui": {
+    "theme": {
+      "tokens": [
+        {
+          "name": "--color-bg",
+          "value": "#ffffff",
+          "use": "The page background behind every screen."
+        },
+        {
+          "name": "--color-surface",
+          "value": "#f7f8fa",
+          "use": "Cards, list rows, table headers — anything raised off the page."
+        },
+        {
+          "name": "--color-border",
+          "value": "#e3e6ea",
+          "use": "Dividers, input borders, card outlines. Never used for emphasis."
+        },
+        {
+          "name": "--color-text",
+          "value": "#14181f",
+          "use": "Body text and headings."
+        },
+        {
+          "name": "--color-text-muted",
+          "value": "#5b6675",
+          "use": "Secondary text: timestamps, hints, empty-state descriptions. Must still meet 4.5:1 against --color-bg."
+        },
+        {
+          "name": "--color-primary",
+          "value": "#1f5eff",
+          "use": "The single action colour: primary buttons, links, selected nav. One action colour per screen, never two."
+        },
+        {
+          "name": "--color-primary-contrast",
+          "value": "#ffffff",
+          "use": "Text on --color-primary. Contrast against it is 4.6:1."
+        },
+        {
+          "name": "--color-positive",
+          "value": "#0a7c4a",
+          "use": "Money you are owed, and settled state. Never the primary action colour."
+        },
+        {
+          "name": "--color-negative",
+          "value": "#b3261e",
+          "use": "Money you owe, validation errors, destructive confirmations. Never used for anything that is merely important."
+        },
+        {
+          "name": "--color-focus",
+          "value": "#1f5eff",
+          "use": "The focus ring, 2px with a 2px offset. A visible ring on every focusable element, never removed."
+        },
+        {
+          "name": "--space-1",
+          "value": "4px",
+          "use": "Inside a control, between a label and its input."
+        },
+        {
+          "name": "--space-2",
+          "value": "8px",
+          "use": "Between related items in a list, padding inside a small control."
+        },
+        {
+          "name": "--space-3",
+          "value": "12px",
+          "use": "Between a form field and the next; card padding on a phone."
+        },
+        {
+          "name": "--space-4",
+          "value": "16px",
+          "use": "Card padding at desktop, gap between list sections."
+        },
+        {
+          "name": "--space-6",
+          "value": "24px",
+          "use": "Between page sections; page padding on a phone."
+        },
+        {
+          "name": "--space-8",
+          "value": "32px",
+          "use": "Page padding at desktop; above an h1."
+        },
+        {
+          "name": "--radius",
+          "value": "8px",
+          "use": "Cards, inputs, buttons. One radius for the product."
+        },
+        {
+          "name": "--font-body",
+          "value": "system-ui, -apple-system, 'Segoe UI', sans-serif",
+          "use": "Everything. No web font: it is a second failure mode and a second second to load."
+        },
+        {
+          "name": "--font-mono",
+          "value": "ui-monospace, 'SF Mono', Menlo, monospace",
+          "use": "Amounts and identifiers, so a column of money aligns."
+        },
+        {
+          "name": "--text-sm",
+          "value": "14px",
+          "use": "Secondary text, timestamps, helper text."
+        },
+        {
+          "name": "--text-base",
+          "value": "16px",
+          "use": "Body. Never below 16px for an input, or the phone zooms on focus."
+        },
+        {
+          "name": "--text-lg",
+          "value": "20px",
+          "use": "h3 and card titles."
+        },
+        {
+          "name": "--text-xl",
+          "value": "24px",
+          "use": "h2."
+        },
+        {
+          "name": "--text-2xl",
+          "value": "30px",
+          "use": "h1, and the one large number on a balance screen."
+        }
+      ],
+      "dark_mode": "Not in this version. The tokens above are light-only and no screen contains a colour literal, so adding a dark set later is a matter of overriding the same names in the @theme block — but no ticket may add a dark mode, a theme switcher or a prefers-color-scheme rule on its own, because a partial dark mode is worse than none. A ticket that needs it adds every token at once.",
+      "typography": "One family, the system UI stack. h1 is --text-2xl, h2 --text-xl, h3 --text-lg, body --text-base, secondary --text-sm. Line height 1.5 for body, 1.2 for headings. Amounts use --font-mono with tabular figures so columns of money align on the decimal point. Never bold for emphasis alone — an amount that is owed or owed-by is distinguished by colour and by the words beside it, so the information survives a screen reader.",
+      "density": "Comfortable, and it does not change by screen. A list row is --space-3 of vertical padding and a minimum touch target of 44px, which is the constraint that actually governs phone layout. Rows are not cards on a phone; cards are for grouping within a screen, and a list of expenses is a list.",
+      "motion": "Two things only: a 150ms ease-out colour transition on interactive elements, and an instant appearance for anything that arrives after a submit. No layout animation, no skeleton shimmer beyond a static placeholder, and prefers-reduced-motion removes the first. An amount appearing is never animated — a number that moves is a number that cannot be read."
+    },
+    "patterns": [
+      {
+        "pattern": "Form error",
+        "rule": "Validate on the server, render the error next to the field that caused it, in --color-negative, in the field's own --text-sm, and focus the first invalid field. The form-level message is only for failures with no field: a wrong current password, a rate limit, a conflict. Never a toast for a validation error — it disappears before it is read and it is not next to the thing that caused it.",
+        "example": "\"That is 240 short of ₹1,000. Check the amounts.\" beneath the amount field, in the field's own space, displacing nothing."
+      },
+      {
+        "pattern": "Empty state",
+        "rule": "Every list has one, and there are two kinds and they are never confused. No data yet: a sentence saying what will be here, plus the single action that creates the first one. No results: what was searched or filtered, plus a way to clear it. An empty state is never an illustration and never an apology.",
+        "example": "No expenses yet — \"Add the first expense for this group.\" with an Add expense button. Against a filter: \"No expenses match these filters.\" with a Clear filters button."
+      },
+      {
+        "pattern": "Loading",
+        "rule": "A static skeleton in the shape of what is coming, not a spinner and not a shimmer. Under 200ms, show nothing — a flash of skeleton is worse than a flash of content. Over 200ms, the skeleton. Over 10 seconds, the skeleton plus a line saying it is taking longer, because an indefinite skeleton reads as a broken page.",
+        "example": "Three grey rows at list-row height where the expenses will be, with no spinner and no animation."
+      },
+      {
+        "pattern": "Error",
+        "rule": "A failed page load says what failed in one sentence, keeps any content that did load on screen, and offers one action: try again. A failed action that is a submission reports next to the field per the form rule, and does not navigate away from what the person was doing. Never a raw error, a stack trace, or an error code.",
+        "example": "\"Couldn't load this group's expenses.\" with a Try again button, and the group's name and balance still shown above it."
+      },
+      {
+        "pattern": "Destructive action",
+        "rule": "Confirm in a dialog that names the thing being destroyed and states the consequence in one sentence, with the confirm button in --color-negative. Leaving a group, removing a member, deleting an expense and deleting a payment all confirm. Archiving a group does not — it is reversible and the owner is the only one who can do it.",
+        "example": "\"Remove Priya from Lisbon? She will no longer appear in this group's balances.\" with Cancel and a Remove Priya button in --color-negative."
+      },
+      {
+        "pattern": "Message after an action",
+        "rule": "No toasts. A successful write updates the screen it happened on, and a change that a person cannot see — leaving, removing, deleting — confirms in place with a short line that names what changed and, where it is reversible, offers Undo. The only exception is a cross-screen navigation, where the destination states the result.",
+        "example": "After leaving a group, the group list shows the row with \"You left Lisbon · Undo\" for ten seconds."
+      },
+      {
+        "pattern": "Money",
+        "rule": "Always rendered by src/lib/money from a bigint, in the group's currency, in --font-mono. A positive balance is \"you are owed\" in --color-positive and a negative one is \"you owe\" in --color-negative; a bare minus sign is never the only signal. On a balance screen the direction is a word beside the number, not a colour applied to it alone.",
+        "example": "\"You are owed ₹420.00\" and \"You owe ₹180.50\", never \"₹-180.50\"."
+      },
+      {
+        "pattern": "Lists",
+        "rule": "One row per record, newest first where recency is the point. Every row is a whole-row link or a whole-row button, not a link around a fragment. Filters and search sit above the list in one row on a phone and never inside it, and the active filter is shown as a removable chip so its presence is never a surprise.",
+        "example": "A row: description on the left, amount on the right, who paid and the date in --text-sm beneath."
+      },
+      {
+        "pattern": "Navigation",
+        "rule": "A single top bar with the app name, the user's groups and a profile link; the group's name with Back on a group sub-screen. No hamburger, no bottom tab bar: every screen is at most two taps from the home screen, and a phone-width layout puts the primary action in view rather than behind a menu.",
+        "example": "Group sub-screens show \"← Lisbon\" at the top, which is a real link back to the group."
+      }
+    ],
+    "layouts": [
+      {
+        "screen": "Home — /",
+        "purpose": "What do I owe and what am I owed, across everything, and which group do I want to look at next.",
+        "regions": "Page header with the app name and a profile link. A summary block of exactly two figures — you owe, you are owed — each with its per-person breakdown directly beneath. Below it, the list of the user's groups, each row showing the name, the type, and the user's net balance in it, newest activity first. A single primary action, Create group, at the top right on a laptop and as a full-width button below the summary on a phone.",
+        "states": {
+          "ideal": "The two summary figures at --text-2xl in --color-negative and --color-positive, then the groups. The signed-in user's own name is not repeated — the page is about them.",
+          "empty": "No groups at all: \"You're not in any groups yet.\" with Create group as the single action, and a second, quieter line inviting them to open an invite link. This is the most important empty state in the product and it is where a new user arrives.",
+          "loading": "Skeleton for the two figures and three group rows. The figures are placeholders, not zeros — a zero reads as 'you owe nothing'.",
+          "partial": "One group's data fails while the rest load: the summary and the other groups render, and the failing row shows its own inline error with Try again. The summary is never rendered from a partial set, because a total of the groups that happened to load is a lie; it is withheld until every group's balance is in.",
+          "error": "Nothing loads: \"Couldn't load your balances.\" with Try again. The header and the Create group action still render, so the page is never a dead end."
+        },
+        "responsive": "One column at every width. At 360px the two figures sit side by side at --text-xl rather than stacking, because comparing them is the whole job; above 600px the content is capped at a readable measure and centred, and the group list gains a second column."
+      },
+      {
+        "screen": "Group overview — /groups/[id]",
+        "purpose": "Where does this group stand right now, and what is the two most recent things that happened in it.",
+        "regions": "Header with the group name, type and currency, and a Back link to home. A balance summary: the user's net balance in this group, stated as a direction and a figure. A simplified-debts block listing the transfers, each \"A pays B ₹X\". A short recent-activity list, five entries, linking to the full feed. A secondary action row: Add expense as the primary action, with Balances, Members and Activity as links.",
+        "states": {
+          "ideal": "Summary, transfers, five recent entries. If every balance is zero this screen says so in place of the transfer list, in the group's own words.",
+          "empty": "A new group with no expenses: the balance summary shows everyone at zero, the transfer list is replaced by the settled message, and recent activity says \"Nothing here yet — add the first expense.\"",
+          "loading": "Skeleton for the summary, three transfer rows and five activity rows.",
+          "partial": "Activity fails to load: the balance summary and transfers — the numbers a person came for — still render, and only the activity block shows its inline error.",
+          "error": "The group cannot be read at all: the group name is not shown (the caller may not be a member, and 404 is the answer), and the page says the group is unavailable with a link home."
+        },
+        "responsive": "One column. On a phone the primary action is a full-width button directly under the header, because it is the thing that happens most often; on a laptop it moves to the header."
+      },
+      {
+        "screen": "Expenses — /groups/[id]/expenses",
+        "purpose": "What has been spent, what is still owed from it, and to add, edit or remove any of it.",
+        "regions": "Header with the group name and Back. A single row above the list holding search and the member and category filters, each shown as a removable chip when active. The list itself, newest first, one row per expense: description, amount, who paid, the date, and a category chip when set. Add expense as the primary action, full-width on a phone.",
+        "states": {
+          "ideal": "The list with the active filters visible as chips. Each row is a link to the expense, where it can be edited or deleted.",
+          "empty": "Two distinct states, per the pattern: no expenses yet, with Add expense as the action; and no matches, naming the filters and offering Clear filters. These are never the same screen.",
+          "loading": "Skeleton rows at list height, five of them, matching the shape of a real row so nothing jumps when they land.",
+          "partial": "Filters are local to the list, so this state is rare: when it happens, the list renders with a line above it saying the results may be incomplete, rather than an error that replaces the list.",
+          "error": "\"Couldn't load this group's expenses.\" with Try again, keeping the filters so a retry does not lose them."
+        },
+        "responsive": "Filters wrap onto two lines below 480px and stay on one above it. The amount stays right-aligned and never wraps to its own line — a column of money that wraps is a column that cannot be scanned."
+      },
+      {
+        "screen": "Expense form — /groups/[id]/expenses/new and /[id]/edit",
+        "purpose": "Record what was paid, who paid it and how it splits, in one pass, without leaving the screen.",
+        "regions": "Header with the group name and Back. Description, amount with the currency symbol fixed beside it, date, optional category, optional note. A participant picker listing the group's members with checkboxes for who is in the split, and a split-type control offering equally, exact amounts, percentages and shares, which changes the inputs shown without navigating. On edit the split type, the checked participants and every entered number come from the expense's stored rule in the order they were saved, so the form reopens showing exactly what was typed rather than a re-normalised version of it; a member who has since left the group is still listed, checked, with their name as it was. A live-updating summary line stating what the split resolves to and, for an invalid one, exactly what is off and by how much. Save as the primary action, full-width on a phone.",
+        "states": {
+          "ideal": "The live summary line updates as the split is edited, so a person sees the shares resolve before they save. On edit the fields arrive populated and the summary states what the stored shares resolve to, so saving an untouched form writes the same expense again.",
+          "empty": "A new expense with the amount and description empty and the participant picker defaulting to every active member. On edit there is no empty state to design: every field is populated from the stored expense, including a split with a remainder, which is shown as entered and not rewritten into an equal share.",
+          "loading": "For edit only, a skeleton of the populated form so the layout does not jump when it lands.",
+          "partial": "Not reachable: the form holds no data that can arrive separately from the members, and the members are loaded before the form renders.",
+          "error": "Field errors render next to their fields, in --color-negative, and focus moves to the first one — never a toast, never a summary-only error. A submit that fails for a reason with no field (a conflict, a rate limit) shows a form-level message above the actions and keeps every value the person typed."
+        },
+        "responsive": "One column. Exact amounts, percentages and shares use a two-column member-and-value row on a phone, with the member name above its value rather than beside it."
+      },
+      {
+        "screen": "Balances — /groups/[id]/balances",
+        "purpose": "Who owes whom in this group, in as few transfers as possible, and to record one.",
+        "regions": "Header with the group name and Back. A per-member table of net balances, each stated as a direction and a figure. Below it, the simplified transfer list — \"A pays B ₹X\" — which is the answer, not the table. A Record payment action as the primary action, opening a small form: from, to, amount, optional note.",
+        "states": {
+          "ideal": "The table and the transfer list, in that order, with the transfer list the visually dominant block. A payment recorded appears in the group's feed and the balances move without a page reload.",
+          "empty": "A group with no members other than the user: the table shows their own zero balance and the transfer list is replaced by the settled message — \"Everyone's square in this group.\"",
+          "loading": "Skeleton for the table rows and three transfer rows.",
+          "partial": "Not reachable: both blocks come from one balance computation, so they are correct or absent together.",
+          "error": "\"Couldn't load this group's balances.\" with Try again."
+        },
+        "responsive": "The table becomes a list of rows below 480px, one member per row, with the amount still right-aligned."
+      },
+      {
+        "screen": "Activity — /groups/[id]/activity and /activity",
+        "purpose": "What has happened in this group, or across all of them, and who did it.",
+        "regions": "Header with the title — the group name, or Activity for the cross-group feed — and Back. A single reverse-chronological list, each entry stating what happened, to whom, and by whom, with a relative time in --text-sm and an absolute time in the title attribute. The cross-group feed additionally names the group on every entry.",
+        "states": {
+          "ideal": "The list, newest first, grouped by day with a date heading in --text-sm.",
+          "empty": "A group with no activity: \"Nothing has happened in this group yet.\" The cross-group feed with none: \"No activity across your groups yet.\" Neither offers an action — the thing that creates activity is an expense, which the reader has just done or has not.",
+          "loading": "Skeleton rows of three lines each, matching the real entry shape.",
+          "partial": "Not reachable: the feed is one query, so it is complete or absent.",
+          "error": "\"Couldn't load the activity.\" with Try again, keeping the title."
+        },
+        "responsive": "One column at every width, capped and centred above 600px. Long descriptions truncate to one line in the feed; the full text is never the reason a row is three lines tall."
+      },
+      {
+        "screen": "Members and invite — /groups/[id]/members",
+        "purpose": "Who is in this group, what they are owed or owe, how to add someone, and what to do about a placeholder.",
+        "regions": "Header with the group name and Back. A list of members, each showing display name, their balance in the group, and their role; the owner is marked. Each member row carries the actions available to the viewer: leave, remove, or claim, decided by role and balance. Below the list, the invite link with Copy link as the primary action, and a control to turn the link off or make a new one, owner-only. Add a placeholder member as a secondary action.",
+        "states": {
+          "ideal": "The member list with balances, the invite link, and the owner-only controls visible to the owner and absent for everyone else.",
+          "empty": "Not reachable: the creator is a member from the moment the group exists, so the list always has at least one row.",
+          "loading": "Skeleton rows for the members, with the invite block skeletoned too, since the token must not flash as absent before arriving.",
+          "partial": "Not reachable: one query.",
+          "error": "\"Couldn't load this group's members.\" with Try again."
+        },
+        "responsive": "One column. On a phone the per-member actions move from the row into a single overflow menu at the right of the row, so a two-word name is never squeezed by three buttons."
+      },
+      {
+        "screen": "Settings, sign-in and sign-up — /settings, /sign-in, /sign-up",
+        "purpose": "The person's own details, and getting in or out.",
+        "regions": "Settings: display name and default currency, one Save button. Sign-in and sign-up: one centred card, no site navigation beyond the brand name, one primary button, and a link to the other form. Sign-out lives in the profile menu on every other screen.",
+        "states": {
+          "ideal": "Settings shows the current values. Sign-in and sign-up show a single field set, focused on the email input on arrival.",
+          "empty": "Not applicable: every field is populated or is an input awaiting a person. There is no data on these screens to be empty.",
+          "loading": "Sign-in and sign-up have no loading state before submit. On submit the primary button is disabled and reads \"Signing in…\", which is the only busy state any screen uses.",
+          "partial": "Not applicable: nothing on these screens loads in pieces.",
+          "error": "A failed sign-in or sign-up shows one form-level message above the button, in --color-negative, identical in wording whether the email is unknown or the password is wrong. A failed save on settings keeps every value and shows the message above Save."
+        },
+        "responsive": "The card is capped at 360px and centred at every width. Below 480px it spans the width with --space-6 of page padding and no card border, so it does not look like a dialog on a phone."
+      }
+    ],
+    "accessibility": [
+      "Every page has exactly one h1, and heading levels descend without skipping. QA checks this on every screen.",
+      "Every control has a visible label. A placeholder is never the only label; placeholders are hints, in --color-text-muted, and disappear on focus.",
+      "Focus is visible on every focusable element: a 2px --color-focus ring at 2px offset, never removed. QA tabs through a form and confirms a ring at every stop.",
+      "Every screen is fully operable by keyboard, in a logical order: the top bar, then the page's primary action, then the content, then any dialog. A dialog traps focus while open and returns it to the control that opened it on close.",
+      "A destructive confirmation is reachable and dismissible by keyboard, and Escape cancels it.",
+      "Body text meets 4.5:1 against its background and large text 3:1; --color-text-muted on --color-bg is 5.6:1 and is not used below --text-sm. QA checks contrast on the tokens, not on individual screens.",
+      "Money is never conveyed by colour alone. A positive or negative balance is stated in words — \"you are owed\", \"you owe\" — beside the figure, so it survives both a screen reader and a colour-blind reader.",
+      "Every form error is associated with its input through aria-describedby and announced, and focus moves to the first invalid field on submit. Errors are never signalled by red alone.",
+      "Loading, empty and error states are in the DOM as text, not conveyed by a spinner or a colour, and a state change is announced in a live region where it replaces content the person was reading.",
+      "Touch targets are at least 44px by 44px, and no control is within 8px of another control's edge, so a phone does not produce mis-taps.",
+      "The app is usable at 200% browser zoom with no horizontal scrolling and no loss of content, and respects prefers-reduced-motion.",
+      "Every image and icon-only control carries a text alternative or an accessible name; an icon-only button is never labelled by its glyph alone."
+    ]
+  },
+  "coverage": [
+    {
+      "section": "S-1",
+      "disposition": "scope",
+      "refs": [
+        "Phase 1 — the application skeleton on Vercel's shape, the database layer (PGlite locally, Postgres in production) with migrations, accounts and sessions, and the health endpoint.",
+        "Phase 2 — groups: create, invite links, placeholder members and claiming, roles, leave and remove.",
+        "Phase 3 — expenses with multiple payers, all four split types, categories, edit and delete.",
+        "Phase 4 — balances, simplified debts and settle-up with partial payments; balances across groups on the home screen.",
+        "Phase 5 — the activity feed, search and filters, the seed, and the README's deploy guide."
+      ]
+    },
+    {
+      "section": "S-2",
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-2",
+        "TR-3",
+        "TR-21",
+        "TR-22"
+      ]
+    },
+    {
+      "section": "S-3",
+      "disposition": "requirement",
+      "refs": [
+        "TR-10",
+        "TR-11",
+        "TR-12"
+      ]
+    },
+    {
+      "section": "S-4",
+      "disposition": "requirement",
+      "refs": [
+        "TR-1",
+        "TR-12",
+        "TR-13",
+        "TR-14",
+        "TR-15",
+        "TR-16"
+      ]
+    },
+    {
+      "section": "S-5",
+      "disposition": "requirement",
+      "refs": [
+        "TR-2",
+        "TR-3",
+        "TR-4",
+        "TR-5",
+        "TR-17",
+        "TR-18"
+      ]
+    },
+    {
+      "section": "S-6",
+      "disposition": "requirement",
+      "refs": [
+        "TR-4",
+        "TR-6",
+        "TR-7",
+        "TR-8",
+        "TR-9",
+        "TR-16"
+      ]
+    },
+    {
+      "section": "S-7",
+      "disposition": "requirement",
+      "refs": [
+        "TR-7",
+        "TR-17",
+        "TR-19"
+      ]
+    },
+    {
+      "section": "S-8",
+      "disposition": "requirement",
+      "refs": [
+        "TR-23",
+        "TR-24",
+        "TR-25"
+      ]
+    },
+    {
+      "section": "S-9",
+      "disposition": "requirement",
+      "refs": [
+        "TR-20",
+        "TR-21",
+        "TR-22",
+        "TR-26",
+        "TR-27"
+      ]
+    },
+    {
+      "section": "S-10",
+      "disposition": "non_goal",
+      "refs": [],
+      "why": "The spec lists these as later and explicitly not built now: password reset and account deletion, native apps, in-app payment, receipt photos and scanning, recurring expenses, multiple currencies per group and exchange rates, charts and reports, and email notifications. Each is named in prd.non_goals with the reason it is a larger surface than the feature it serves. The design does not make them hard — currency is carried on the expense row, and each of the rest is an added table or column, not a change of key — and the money invariant in particular is what keeps a later per-expense currency additive."
+    },
+    {
+      "section": "S-11",
+      "disposition": "scope",
+      "refs": [
+        "Phase 1 — the application skeleton on Vercel's shape, the database layer (PGlite locally, Postgres in production) with migrations, accounts and sessions, and the health endpoint.",
+        "Phase 2 — groups: create, invite links, placeholder members and claiming, roles, leave and remove.",
+        "Phase 3 — expenses with multiple payers, all four split types, categories, edit and delete.",
+        "Phase 4 — balances, simplified debts and settle-up with partial payments; balances across groups on the home screen.",
+        "Phase 5 — the activity feed, search and filters, the seed, and the README's deploy guide."
+      ]
+    }
+  ]
+}
