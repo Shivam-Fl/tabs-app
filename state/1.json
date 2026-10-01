@@ -156,7 +156,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": "maintainer",
+  "resume_at": null,
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -165,7 +165,7 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": "project",
+  "stopped_at": null,
   "dispatched_stage": "project",
   "failure_packet": {
     "issue": 1,
@@ -186,5 +186,14 @@
       ]
     }
   },
-  "brief_pr": 2
+  "brief_pr": 2,
+  "replan_requested_at": "2026-10-01T22:05:07.900Z",
+  "route_notes": [
+    {
+      "by": "Shivam-Fl",
+      "at": "2026-10-01T22:05:07.900Z",
+      "kind": "replan-project",
+      "note": "Approve with two changes, both in the money core; keep everything else as it is. (1) Store the split rule with the expense, not only its result: the split type and the per-member inputs the person entered (exact amounts, percentages or shares, and who was included). The edit form must reopen showing exactly what was entered, and the activity entry for an edit must be able to say what changed (amount, payers, participants, split type). Balances still read only from the stored expense_payer and expense_share rows. Add it to the data model, the expense form in docs/ui.md, and an ADR. (2) Rewrite TR-4 and the matching invariant, which as written say an edit never changes a balance; that contradicts editing. The rule is: editing or deleting an expense replaces that expense's stored payers and shares in one transaction with its activity entry, so balances move by exactly the difference; and no balance ever changes except through a write to that expense or payment. In particular a change to the split algorithm or rounding rule never re-evaluates stored history."
+    }
+  ]
 }
