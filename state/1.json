@@ -560,7 +560,7 @@
           "env.mode: preview rather than compose in .sdlc/config.yml — a reserved path, and an open question in the brief.",
           "Dark mode, which the brief forbids a single ticket from adding."
         ],
-        "issue": null
+        "issue": 12
       }
     ],
     "deferred": []
@@ -574,6 +574,7 @@
     8,
     9,
     10,
-    11
+    11,
+    12
   ]
 }
