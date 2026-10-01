@@ -6,12 +6,16 @@
   "lock_expires": null,
   "lock_run": null,
   "attempts": {
-    "plan": 0,
+    "plan": 1,
     "ci": 0,
     "review": 0,
     "qa": 0
   },
-  "attempt_run": null,
+  "attempt_run": {
+    "counter": "plan",
+    "n": 1,
+    "run": "36935002353"
+  },
   "halted": null,
   "pending": null,
   "work_order": null,
@@ -29,7 +33,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:09.497Z",
-  "updated_at": "2026-10-01T22:24:13.057Z",
+  "updated_at": "2026-10-01T22:25:59.461Z",
   "history": [
     {
       "at": "2026-10-01T22:24:13.057Z",
@@ -40,6 +44,11 @@
       "at": "2026-10-01T22:25:40.636Z",
       "agent": "router",
       "action": "route plan -> implement -> review -> qa (model, confidence 88)"
+    },
+    {
+      "at": "2026-10-01T22:25:59.461Z",
+      "agent": "plan",
+      "action": "plan attempt 1"
     }
   ],
   "epic": 1,
