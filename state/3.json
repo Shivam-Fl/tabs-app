@@ -70,5 +70,599 @@
     "decided_at": "2026-10-01T22:25:40.636Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "issue": 3,
+    "version": 1,
+    "kind": "feature",
+    "mode": "proposal",
+    "understanding": "This is the first ticket with product code in it, so it does two separable jobs and the second is not optional.\n\nThe product job: the users, sessions and login_attempts tables with the first migration list; a Drizzle client that is Neon when DATABASE_URL is set and in-process PGlite when it is not; migrations applied on boot behind an advisory lock; GET /api/health whose 200 means a real query answered; email-and-password accounts; sessions in an httpOnly cookie; sign-in rate limiting; a profile; and the five screens (/, /sign-up, /sign-in, /settings, the top bar) with the theme tokens and the ten UI primitives every later screen is built from.\n\nThe pipeline job: this is the branch that makes sdlc:verify, sdlc:serve, sdlc:ready and sdlc:seed real. `.sdlc/bin/verify-is-real.mjs` runs on every PR carrying product code and fails it on ANY sdlc: verb still matching isTrivialScript — not only the one `verify.unit` names. I re-ran the guard's own gatingScripts() against the exact package.json this order produces: it returns all four verbs plus typecheck/lint, and with `sdlc:seed` left as the issue's echo stub the trivial set is exactly ['sdlc:seed']. `.github/workflows/ci-verify.yml` runs that guard inside the Unit tests step and fails the job on any check outcome of 'failure'. So the issue's line 'sdlc:seed stays a stub here; piece 9 makes it real' cannot hold on a branch that carries code. The proposal's remedy — a scripts/seed.mjs that connects to the database and reports the driver — is dismissed: a plain .mjs run by bare `node` cannot import src/db/client.ts (TypeScript, no build step), and ADR-0007 and ADR-0002 both say a seed must not open the database from a second process. The remedy this order takes is the critique's: scripts/seed.mjs is an HTTP liveness check against /api/health that requires the app to be up (ADR-0007's stated dependency), touches no database handle, and cannot corrupt anything; piece 9 replaces its body with the POST /api/dev/seed call ADR-0007 already specifies. `node .sdlc/bin/lib/guards.js` isTrivialScript() returns false for that body, so CI stays green without this branch shipping a fixture set that is not its own.\n\nThe one binding decision recorded for this issue — store the split rule with the expense, and rewrite TR-4 so an edit legitimately changes the ledger — concerns piece 3's expense form and piece 4's balances. Nothing here implements it and nothing pre-empts it: there is no expense table, no split type and no amount in this data model. It is honoured by omission and named in out_of_scope.",
+    "root_cause": "Not a defect. The repository is empty by design: package.json holds four verbatim echo stubs, there is no src/, no tsconfig and no test, so no sdlc: verb has anything to run and `.sdlc/bin/verify-is-real.mjs` correctly stands down until product code lands. This ticket is the first landing of product code, which is the exact condition under which that guard starts enforcing — and, verified by running its own guard function rather than by reading it, the condition under which leaving sdlc:seed a stub turns the branch red.",
+    "approach": "Build in dependency order and wire the four verbs last, so that by the time ci-verify's verify-is-real step can fail, every verb is real.\n\n**Data.** `src/db/schema.ts` is the single description: `users` (id uuid, email unique and stored lowercased, password_hash, display_name, default_currency varchar(3), created_at, updated_at), `sessions` (id, user_id, token_hash, expires_at, created_at) and `login_attempts` (id, key_hash, source_hash, succeeded, created_at). The session table stores only the SHA-256 of a 32-byte random token, so the hash is one-way because the input has 2^256 entropy — the raw value exists in the cookie and nowhere else. The email and the source address are low-entropy, so plain SHA-256 there would be reversible by any wordlist and IPv4 exhaustible in minutes; both columns are therefore HMAC-SHA-256 keyed by a server-side secret that src/lib/env.ts owns (required in production, documented default in development), and the claim made about them is exactly that: no email and no address in the clear, and no digest computable without the secret. Money columns do not appear in this ticket — there is no amount to store — so `default_currency` is a currency code, not money.\n\n**One client, two drivers.** `src/db/client.ts` exports `createDatabase(driver)` taking an already-constructed PGlite instance or Neon Pool, so tests/helpers/pglite.ts hands a fresh in-memory PGlite to the same code the app uses, and separately a module-level `db` singleton chosen once at import from the presence of DATABASE_URL, held on globalThis so dev-mode module reloading cannot open a second PGlite on the same data directory. `src/db/migrate.ts` exports `migrate(db, migrations)`: take `pg_advisory_lock(hashtext('tabs:migrations'))`, re-read the applied set INSIDE the lock, apply only what is missing in order inside one transaction, release in a finally. Re-reading inside the lock is the whole point — reading before it is the bug that lets two cold starts both decide a migration is pending. `src/instrumentation.ts` calls it once per server start on the Node runtime, guarded by `process.env.NEXT_RUNTIME === 'nodejs'`: Next's own boot hook, not middleware, because middleware runs on the Edge runtime (ADR-0002) and the PGlite WASM must not be bundled (conventions.md).\n\n**Env.** `src/lib/env.ts` is one module owning every variable: the required-in-production set, the documented development defaults, and the one log line naming which defaults it used. Nothing else in src/ reads process.env for configuration except client.ts's single DATABASE_URL check, so the variable list is greppable in one file. IAC-9's failing case is env.ts throwing a message naming each missing variable before anything connects.\n\n**Auth.** `src/lib/auth.ts` holds the whole of it: scrypt at N=2^17, r=8, p=1 with a 16-byte random salt and the parameters carried in the stored string (ADR-0006); session create/resolve/revoke; the rate-limit predicate; and `requireUser()`, which reads the cookie and redirects to /sign-in when there is no live session. Sign-up, sign-in and sign-out are Server Actions in `src/app/actions/auth.ts`; the profile save is `src/app/actions/profile.ts`. All four return `{ok:false, fieldErrors, formError}` on an expected failure rather than throwing (conventions.md). The session cookie is httpOnly, Secure, SameSite=Lax, path /, maxAge 30 days, unconditionally — the Secure attribute is not made conditional on the environment. Chrome and Firefox both treat http://localhost as a secure context and store a Secure cookie there, so TR-10 holds in QA as written; if a browser ever does not, that is a finding to report, not a deviation to introduce.\n\n**Rate limiting — the reading this order commits to, with its constants named.** IAC-7's two sentences are only simultaneously true if the account limit refuses wrong passwords without locking the account out. So: every attempt verifies the password; a correct password always signs in and clears that account's failure rows whatever the count; a wrong password records a failure and returns the one generic message. Constants, stated here so they are the plan's rather than an accident: ACCOUNT_LIMIT = 6 failures, WINDOW = 15 minutes, both sliding over `created_at`; SOURCE_LIMIT = 20 attempts per source in the same window. The account-keyed limit decides only how fast a wrong password is refused. The source-keyed limit is different in kind — flooding is a denial of service, not a credential guess — and it is a hard refusal that skips the scrypt comparison entirely. The source address comes from the first hop of `x-forwarded-for`, falling back to `x-real-ip`. **When no address can be determined, the source limit does not apply and the account limit carries the request alone.** That is a deliberate choice over the alternative: `next start` on loopback sets neither header, so in QA and in local development every request has the same absent address, and a shared bucket would let one flood refuse every legitimate user of a deployment — the very denial of service the account limiter is designed to avoid — and would make QA's own repeated sign-ins trip a global lock. Exempting unknown sources means the source limit is inert until a proxy sets the header, which is stated in the code comment and in residual_risks rather than left to be discovered. All four refusals — unknown email, wrong password, account-limited, source-limited — return the identical message and are indistinguishable to the caller.\n\n**Retention.** Every sign-in attempt writes a login_attempts row by design, so `checkRateLimit` deletes rows older than WINDOW at the top of the call, and `resolveSession` deletes the row it resolves once it is past expires_at. Both are index-supported and both keep each predicate's own query bounded. Without this the tables grow without bound, invisibly in CI and QA where PGlite is in-memory and recreated every boot, and on Neon from the first day.\n\n**Screens.** A route group `src/app/(app)/` holds the signed-in shell: its layout calls requireUser() and renders the shell, and it contains `/` and `/settings`. Sign-in and sign-up sit outside it, so a signed-out visitor never runs the shell. `/` is the empty state exactly as docs/ui.md words it — \"You're not in any groups yet.\" with Create group as the single action and a quieter second line about opening an invite link — because there are no groups yet and no group query runs. The ten primitives are the design system's floor and the ticket names them, so they are built here; two of them (money, dialog) have no caller in this ticket and that is stated per file rather than hidden. The home empty state and the shell are extracted as synchronous presentational components (`src/components/home-empty.tsx`, `src/components/shell.tsx`) that the pages render and the component tests render, because a Server Component that awaits `cookies()` cannot be rendered by @testing-library/react and importing it would construct a real PGlite at import time.\n\n**Verbs, last.** package.json gets typecheck, lint, test, build, dev, db:generate and the four real sdlc: bodies, every version pinned exactly per conventions, plus a committed package-lock.json for ci-verify's `npm ci`. `verify.typecheck` and `verify.lint` are empty in `.sdlc/config.yml` and that file is reserved, so typecheck and lint run through sdlc:verify in the order conventions fixes rather than as separate ci-verify steps; the checks still run, on every PR.",
+    "files": [
+      {
+        "path": "package.json",
+        "action": "edit",
+        "change": "Replace the four echo stubs with the real verbs — sdlc:verify `npm run typecheck && npm run lint && vitest run`, sdlc:serve `next build && next start --port 3000`, sdlc:ready `curl -fsS --max-time 5 http://localhost:3000/api/health`, sdlc:seed `node scripts/seed.mjs` — and add typecheck (`tsc --noEmit`), lint (`eslint .`), test (`vitest run`), build (`next build`), dev (`next dev`), db:generate (`drizzle-kit generate`). Add exactly pinned dependencies: next 16.3, react and react-dom 19.3, drizzle-orm 0.45, @neondatabase/serverless 1.2, @electric-sql/pglite 0.5.8, zod 4.6, tailwindcss 4.3 with @tailwindcss/postcss; and dev deps typescript 5.9, drizzle-kit 0.45, eslint 9 with typescript-eslint, eslint-plugin-react, eslint-plugin-react-hooks, vitest 5, @vitejs/plugin-react, jsdom, @testing-library/react and @testing-library/jest-dom. Commit package-lock.json alongside so ci-verify's `npm ci` has one.",
+        "why": "The ticket's subject, and the file whose sdlc:seed body is the one place this order knowingly contradicts a line of the issue. Verified by running the guard's own gatingScripts()/isTrivialScript() over this exact scripts map, not inferred."
+      },
+      {
+        "path": "tsconfig.json",
+        "action": "create",
+        "change": "Strict TypeScript 5.9 config. The fields that must be present and must survive Next's rewrite of this file on the first `next build` are: `strict: true`, `module: esnext`, `moduleResolution: bundler`, `jsx: preserve`, `allowJs: true`, `skipLibCheck: true`, `noEmit: true`, `incremental: true`, `plugins: [{ name: 'next' }]`, `paths: { '@/*': ['./src/*'] }`, and `include` covering `src`, `tests`, `scripts`, `next-env.d.ts` and `.next/types/**/*.ts`. Next injects the `next` plugin, the `.next/types` include and its own jsx/moduleResolution settings; these are the ones it must not find it needing to change.",
+        "why": "sdlc:verify's first command is `tsc --noEmit`; without this the branch has no typecheck at all. Naming the surviving fields is what stops the hand-authored config and the build-rewritten config from being two configs."
+      },
+      {
+        "path": "next-env.d.ts",
+        "action": "create",
+        "change": "Next's own ambient declaration file, committed: `/// <reference types=\"next\" />`, `/// <reference types=\"next/image-types/global\" />` and the redirect/error-boundary references Next 16 writes. This repository's .gitignore does not exclude it.",
+        "why": "Without it `import './globals.css'` in src/app/layout.tsx is TS2307 under `tsc --noEmit` — the `declare module '*.css'` lives in next/types/global.d.ts and is reachable only through this file's reference. Next generates it on `next dev`/`next build`, but sdlc:verify runs typecheck first on a clean checkout, before any build has happened. This is the first command of sdlc:verify failing for a reason unrelated to the product."
+      },
+      {
+        "path": "next.config.ts",
+        "action": "create",
+        "change": "List @electric-sql/pglite in `serverExternalPackages`. No other setting.",
+        "why": "conventions.md: it is not on Next's automatic external list, and bundling a WASM Postgres is how the database silently stops working in a build."
+      },
+      {
+        "path": "postcss.config.mjs",
+        "action": "create",
+        "change": "Tailwind 4's PostCSS plugin as the only export. No Tailwind config file — the theme lives in the `@theme` block in globals.css.",
+        "why": "Tailwind 4.3 has no tailwind.config.js; without this the utility classes silently do nothing and every screen renders unstyled."
+      },
+      {
+        "path": "eslint.config.mjs",
+        "action": "create",
+        "change": "Flat config. typescript-eslint's `recommended-type-checked` over ts/tsx WITH `languageOptions.parserOptions.projectService: true` and `tsconfigRootDir: import.meta.dirname` over the tsconfig created here — every rule in recommended-type-checked, and no-floating-promises and no-misused-promises in particular, throws rather than warns without type information. Plus the react and react-hooks plugins and ignores for `.next`, `node_modules` and `drizzle`. No rule about money types yet.",
+        "why": "Lint is the second of the three commands sdlc:verify runs, and AC-1 requires it to pass. The money rule is piece 4's, because there is no money type until then. Fallback if projectService mis-handles the tests/ tree: an explicit `project: ['./tsconfig.eslint.json']`."
+      },
+      {
+        "path": "vitest.config.ts",
+        "action": "create",
+        "change": "`environment: 'node'` by default with `environmentMatchGlobs` (or per-file `// @vitest-environment jsdom` docblocks) for tests/components/**, the `@/*` alias, `setupFiles` pointing at a single tests/setup.ts that installs @testing-library/jest-dom once, and `include` covering tests/**/*.{test,spec}.{ts,tsx}. One runner serves the integration and the component tests, so `vitest run` alone proves both and sdlc:verify needs no second command.",
+        "why": "The same runner serves both halves of the suite; AC-1 requires `vitest run` and nothing more."
+      },
+      {
+        "path": "drizzle.config.ts",
+        "action": "create",
+        "change": "dialect postgresql, schema ./src/db/schema.ts, out ./drizzle. No dbCredentials — `generate` is offline and the runtime migrator never reads this file.",
+        "why": "Lets `npm run db:generate` regenerate the migration list from the schema rather than the SQL being hand-maintained beside the schema that describes it."
+      },
+      {
+        "path": "src/db/schema.ts",
+        "action": "create",
+        "change": "The three tables. users: id uuid primary key default gen_random_uuid(), email text not null unique, password_hash text not null, display_name text not null, default_currency varchar(3) not null, created_at and updated_at timestamptz. email uniqueness is plain `unique` on a value the action lowercases and trims — not citext, which would make the local guarantee and the production one differ on an extension PGlite may not carry. sessions: id uuid, user_id uuid not null references users(id) on delete cascade, token_hash text not null unique, expires_at timestamptz not null, created_at, indexed on token_hash and on user_id. login_attempts: id uuid, key_hash text not null, source_hash text not null, succeeded boolean not null, created_at, indexed on (key_hash, created_at) and (source_hash, source_hash, created_at). No money column appears — nothing in this ticket stores an amount.",
+        "why": "project.md names this the single description of the data model. token_hash being unique is what makes session lookup one indexed read; varchar(3) over char(3) avoids the blank-pad question on a currency code altogether."
+      },
+      {
+        "path": "src/db/client.ts",
+        "action": "create",
+        "change": "`createDatabase(driver)` wraps an already-built PGlite instance or Neon Pool in the matching Drizzle driver and returns it typed as one Database union. A module-level `db` chooses the driver once at import from the presence of DATABASE_URL: Pool from @neondatabase/serverless when set (the WebSocket driver, because ADR-0004 needs a session to hold the advisory lock), one PGlite instance when not, held on globalThis so dev module reloading cannot open the same data directory twice. Memoise any pending initialisation behind a module-level promise so a per-request register() cannot re-run it.",
+        "why": "ADR-0002. Taking the driver as a parameter rather than reading the environment inside is what lets the integration tests run the real code against a throwaway PGlite with no mock of this file."
+      },
+      {
+        "path": "src/db/migrate.ts",
+        "action": "create",
+        "change": "`migrate(db, migrations)`: take `pg_advisory_lock(hashtext('tabs:migrations'))`, read the applied set from the migrations table INSIDE the lock, apply only the missing files in order inside one transaction, record each, release the lock in a `finally` whether or not a migration threw. A no-op when the set is already current. If pg_advisory_lock or hashtext turns out to be unavailable on PGlite 0.5.8, the fallback is a `select ... for update` on a migrations row held in the transaction, which serialises the same critical section on both backends — one function changes and nothing else in this order moves.",
+        "why": "IAC-3's lock requirement. Reading the applied set before taking the lock is the specific bug that lets two cold starts apply one migration twice."
+      },
+      {
+        "path": "src/instrumentation.ts",
+        "action": "create",
+        "change": "A `register()` that returns immediately unless `process.env.NEXT_RUNTIME === 'nodejs'`, then initialises the client and awaits migrate(), logging the driver in use and how many migrations were applied. Never touches the Edge runtime.",
+        "why": "Migrations run on boot in development, CI, QA and production from one place (ADR-0004), and instrumentation is Next's own once-per-start hook on the Node runtime. Middleware would put the PGlite WASM in an Edge bundle, which is the failure conventions.md names."
+      },
+      {
+        "path": "src/lib/env.ts",
+        "action": "create",
+        "change": "One module owning every environment variable. It reads them once; in production it throws an Error naming EVERY missing required variable (DATABASE_URL and the HMAC key); otherwise it substitutes the documented local defaults and logs one line naming each default it used. Exports the resolved config, the requiredInProduction list and the HMAC key. Nothing else in src/ reads process.env for configuration except client.ts's single DATABASE_URL check.",
+        "why": "IAC-9 and TR-22 in one greppable place rather than a check per call site."
+      },
+      {
+        "path": "src/lib/auth.ts",
+        "action": "create",
+        "change": "The whole of auth, so its security properties are readable in one file. `hashPassword`/`verifyPassword` on `crypto.scryptSync` at N=2^17, r=8, p=1 with a 16-byte random salt, stored as one string carrying the parameters, the salt and the hash (ADR-0006). `createSession` generates 32 random bytes, stores only their SHA-256 and returns the raw token for the cookie. `resolveSession(token)` returns the user only if the row exists and has not expired, deleting an expired row it touches. `revokeSession(tokenHash)` deletes the row. `keyFor(email)` and `sourceFor(address)` are HMAC-SHA-256 over the trimmed-lowercased email and the address respectively, keyed by the env module's secret — NOT plain SHA-256, because both inputs are low-entropy and reversible by wordlist or exhaustive search. `checkRateLimit(email, address)` deletes rows older than WINDOW, then returns 'ok' | 'account' | 'source' against the constants ACCOUNT_LIMIT = 6, SOURCE_LIMIT = 20, WINDOW = 15 minutes (sliding, over `created_at`). It reads the source bucket only when an address was actually determined; an absent address exempts the request from the source limit (see approach). `requireUser()` reads the cookie, resolves the session and redirects to /sign-in when there is none. The cookie is set httpOnly, Secure, SameSite=Lax, path /, maxAge 30 days, unconditionally.",
+        "why": "ADR-0005 and project.md name this one file. The HMAC and the constants are stated here rather than left to the implementer, because both are decisions (finding 5 and finding 15) and neither is recoverable from the code afterwards."
+      },
+      {
+        "path": "src/app/actions/auth.ts",
+        "action": "create",
+        "change": "Three Server Actions: signUp, signIn, signOut. Each parses its input with a Zod schema in this same file and returns `{ok:false, fieldErrors, formError}` on an expected failure rather than throwing. signUp trims and lowercases the email, enforces a password length bound (8–200 characters — scryptSync runs over the whole input, so an unbounded body spends the quarter second per attempt the source limiter exists to ration) and a display-name length bound, and inserts with `onConflictDoNothing` on users.email so the unique constraint is authoritative and a duplicate maps to `fieldErrors.email` with the same wording the pre-check uses; the pre-check is a nicety for the message, never the guarantee. It creates the user and its session in one transaction. signIn verifies the password, applies the rate-limit decision, and returns one identical message for unknown email, wrong password and either refusal. signOut revokes the row and clears the cookie.",
+        "why": "conventions.md: writes are Server Actions, one file per noun, validated with Zod, returning a typed result the form renders. The insert being authoritative rather than the pre-check is finding 9: a read-then-insert race otherwise surfaces as a 500 on exactly the double-submit QA is asked to perform."
+      },
+      {
+        "path": "src/app/actions/profile.ts",
+        "action": "create",
+        "change": "Create with a single Server Action, `updateProfile`: Zod-validated displayName (trimmed, length-bounded) and defaultCurrency (trimmed and uppercased to exactly three letters, so 'usd' and 'USD' are one currency and piece 2 cannot inherit two), authorised by requireUser(), updating the signed-in user's own row and revalidating the paths that show the name.",
+        "why": "IAC-8, and it is a write, so it is an action and not a route. The uppercasing is finding 16: a char/varchar currency code copied onto a group's column in piece 2 is cheaper to normalise now."
+      },
+      {
+        "path": "src/app/api/health/route.ts",
+        "action": "create",
+        "change": "GET with `export const dynamic = 'force-dynamic'`. Runs a real query (`select 1`) against the configured client, timing it, and returns 200 `{status:'ok', database:'ok', latencyMs}` with a positive measured latencyMs. On failure returns 503 `{status:'degraded', database:'error', error: <redacted>}` where the redaction strips anything resembling a connection string, a password, or a host with credentials before serialisation — and the returned message is a fixed sentence naming that the database could not be reached, never the driver's own text. No session required.",
+        "why": "IAC-2, and it is what sdlc:ready polls: a 200 here has to mean the database answered, or every later ticket's readiness check is theatre."
+      },
+      {
+        "path": "scripts/seed.mjs",
+        "action": "create",
+        "change": "A plain Node ESM script, no build step. Refuses to run and exits non-zero when NODE_ENV=production, printing that seeding is never available in production. Otherwise performs an HTTP GET of http://localhost:3000/api/health, prints the status it received, and exits 0 on 200 or non-zero otherwise. It opens no database handle, imports nothing from src/, and writes no rows; a comment states that piece 9 replaces this body with the POST /api/dev/seed call ADR-0007 specifies.",
+        "why": "sdlc:seed has to be non-trivial or verify-is-real fails the branch. This body satisfies isTrivialScript (it fetches and branches on the result), honours ADR-0007's dependency on the app being up, and cannot corrupt a PGlite data directory the way a direct-connect seed would — which is what the proposal's version would have done, since a bare `node` cannot import the TypeScript client at all."
+      },
+      {
+        "path": "src/app/globals.css",
+        "action": "create",
+        "change": "`@import 'tailwindcss'` and a `@theme` block transcribing docs/ui.md's Theme table token for token, by name rather than by count: the ten colours `--color-bg`, `--color-surface`, `--color-border`, `--color-text`, `--color-text-muted`, `--color-primary`, `--color-primary-contrast`, `--color-positive`, `--color-negative`, `--color-focus`; the six spacing steps `--space-1`, `--space-2`, `--space-3`, `--space-4`, `--space-6`, `--space-8`; `--radius`; both font stacks `--font-body` and `--font-mono`; and the five text sizes `--text-sm`, `--text-base`, `--text-lg`, `--text-xl`, `--text-2xl`, each with the value the table gives it. The focus ring is a 2px solid var(--color-focus) at 2px offset, defined once and never overridden.",
+        "why": "docs/ui.md is approved and no screen may contain a colour literal, so the tokens must exist before the first screen. Listing them by name removes the counting error that made 'eleven colours, five spacing steps, six text sizes' wrong in three places — the actual counts are ten, six and five."
+      },
+      {
+        "path": "src/app/layout.tsx",
+        "action": "create",
+        "change": "The root document: html, body, the globals.css import, `lang`, and the skip link. No session access and no database — a signed-out visitor must not pay for the shell.",
+        "why": "This layout is shared by /sign-in and /sign-up; touching the database here would make every auth page dynamic for nothing."
+      },
+      {
+        "path": "src/components/shell.tsx",
+        "action": "create",
+        "change": "A synchronous presentational Server Component: the top bar and a `<main>` landmark, taking the already-resolved user as a prop. It performs no session read and no database access of its own.",
+        "why": "The signed-in layout is async because it awaits requireUser(), and @testing-library/react cannot render an async Server Component — nor can a test import one, since the layout transitively constructs a real PGlite at import. Extracting the markup is what makes the shell's structure testable in jsdom without a database or a request scope."
+      },
+      {
+        "path": "src/app/(app)/layout.tsx",
+        "action": "create",
+        "change": "An async Server Component that calls requireUser() — so any URL under this group without a live session redirects to /sign-in — resolves the user, and renders src/components/shell.tsx with it. Nothing else.",
+        "why": "TR-1's 'an unauthenticated request is redirected to sign-in', enforced once for the group rather than repeated per page."
+      },
+      {
+        "path": "src/components/home-empty.tsx",
+        "action": "create",
+        "change": "A synchronous presentational component: exactly one h1, the app name, and EmptyState reading \"You're not in any groups yet.\" with Create group as the single action and the quieter second line inviting the person to open an invite link, exactly as docs/ui.md words them. Takes no props and reads nothing.",
+        "why": "The empty state is where every new account arrives and the ticket puts it in scope; extracting it from the page is what lets a component test assert the exact string without a session, a database or an async component."
+      },
+      {
+        "path": "src/app/(app)/page.tsx",
+        "action": "create",
+        "change": "The home screen: renders src/components/home-empty.tsx. No group query runs, because there is no group table in this ticket.",
+        "why": "IAC-4. The empty state is the destination for every new account and the ticket names it here."
+      },
+      {
+        "path": "src/app/(app)/loading.tsx",
+        "action": "create",
+        "change": "A static skeleton composed from src/components/ui/skeleton.tsx: two figure placeholders and three group rows at list-row height, matching docs/ui.md's rule that figures are placeholders and never zeros. No shimmer, no spinner.",
+        "why": "IAC-10 and TR-24 require a designed loading state on every screen that can reach one. This is skeleton.tsx's first caller, so only money.tsx and dialog.tsx are caller-less in this ticket."
+      },
+      {
+        "path": "src/app/(app)/error.tsx",
+        "action": "create",
+        "change": "A client error boundary rendering ErrorState — \"Couldn't load this page.\" with a Try again button calling `reset` — keeping the top bar so the screen is never a dead end. No raw error, no stack trace, no error code.",
+        "why": "docs/ui.md's Error pattern; (app)/error.tsx is ErrorState's first caller."
+      },
+      {
+        "path": "src/app/(app)/settings/page.tsx",
+        "action": "create",
+        "change": "One h1, a form with a labelled Input for display name and a labelled select for default currency, and one Save button wired to updateProfile. Field errors render beside their field through Field's aria-describedby; a form-level failure sits above Save through FormMessage and keeps every value typed.",
+        "why": "IAC-8."
+      },
+      {
+        "path": "src/app/sign-up/page.tsx",
+        "action": "create",
+        "change": "A centred card capped at 360px, one h1, labelled email and password inputs, one primary button reading \"Creating account…\" while the action is pending, a link to /sign-in, and one form-level message. The email input is focused on arrival.",
+        "why": "IAC-4, and the surface QA can actually reach: qa_auth.mode is `none`, so QA arrives signed out and drives the sign-up path."
+      },
+      {
+        "path": "src/app/sign-in/page.tsx",
+        "action": "create",
+        "change": "The same card with a password field, a button reading \"Signing in…\" while pending, and a link to /sign-up. The busy state is the only one in the product, per docs/ui.md.",
+        "why": "TR-10 and docs/ui.md's sign-in design."
+      },
+      {
+        "path": "src/components/top-bar.tsx",
+        "action": "create",
+        "change": "The app name linking to /, a profile link to /settings, and a Sign out form posting the signOut action. Server Component; no client state, no hamburger, no bottom tab bar, no profile menu.",
+        "why": "docs/ui.md's Navigation pattern: one top bar, every screen at most two taps from home. The profile menu docs/ui.md mentions is not built here because there is no menu primitive in the design system and four screens do not need one — stated in residual_risks rather than left as an unexplained divergence."
+      },
+      {
+        "path": "src/components/ui/button.tsx",
+        "action": "create",
+        "change": "Variants primary and secondary, sizes md and lg, a visible 2px focus ring at 2px offset that is never removed, a 44px minimum touch target, and a `busy` prop that disables and appends an ellipsis. Colours only from theme tokens.",
+        "why": "The primary action on all four screens; the focus ring and the touch target are the two accessibility rules every screen inherits from it."
+      },
+      {
+        "path": "src/components/ui/input.tsx",
+        "action": "create",
+        "change": "A labelled text input at --text-base (never below 16px, or a phone zooms on focus), forwarding id, name, type, autoComplete, required, aria-invalid and aria-describedby, rendering a placeholder in --color-text-muted that is never the only label.",
+        "why": "A control with no label is a defect against IAC-10 on every screen that uses one."
+      },
+      {
+        "path": "src/components/ui/field.tsx",
+        "action": "create",
+        "change": "Composes a visible `<label htmlFor>`, its control, and an error message in --color-negative at --text-sm, wiring aria-describedby and aria-invalid to the control. The form-level variant renders above the actions for a failure with no field.",
+        "why": "docs/ui.md's Form error pattern in one component, so a later screen cannot get the aria wiring wrong."
+      },
+      {
+        "path": "src/components/ui/card.tsx",
+        "action": "create",
+        "change": "A surface at --color-surface with --radius, the documented padding at each breakpoint, and no shadow.",
+        "why": "docs/ui.md reserves cards for grouping within a screen; the radius is one value for the whole product."
+      },
+      {
+        "path": "src/components/ui/dialog.tsx",
+        "action": "create",
+        "change": "A client component: focus trapped while open, focus returned to the opening control on close, Escape cancels, and the confirm button carries --color-negative. Built now, used by the first ticket that destroys something.",
+        "why": "The ticket names ten primitives and this is one of them. It has no caller in this ticket — see residual_risks, which says so plainly rather than pretending otherwise."
+      },
+      {
+        "path": "src/components/ui/money.tsx",
+        "action": "create",
+        "change": "A client component that formats a bigint count of minor units through Intl.NumberFormat in the given currency, in --font-mono with tabular figures, and states the direction in words beside the figure rather than relying on a minus sign or a colour. Takes a bigint, never a number.",
+        "why": "The ticket names it and TR-23's rule belongs to the primitive rather than to each screen. No caller in this ticket — see residual_risks."
+      },
+      {
+        "path": "src/components/ui/empty-state.tsx",
+        "action": "create",
+        "change": "A heading, a sentence saying what will be here, and one action. Two kinds kept distinct by prop: no-data-yet against no-matches, never the same screen. Never an illustration, never an apology.",
+        "why": "The home screen's empty state is the most important one in the product and it is in this ticket."
+      },
+      {
+        "path": "src/components/ui/error-state.tsx",
+        "action": "create",
+        "change": "One sentence naming what failed and a single Try again action, with a slot for content that did load. Never a raw error, a stack trace or an error code.",
+        "why": "docs/ui.md's Error pattern; (app)/error.tsx is its first caller."
+      },
+      {
+        "path": "src/components/ui/skeleton.tsx",
+        "action": "create",
+        "change": "Static grey blocks at a given height and width. No shimmer, no spinner, no animation — a static placeholder by construction, which is also prefers-reduced-motion-safe.",
+        "why": "docs/ui.md forbids a shimmer; the loading state is a shape, not an effect. (app)/loading.tsx is its first caller in this ticket."
+      },
+      {
+        "path": "src/components/ui/form-message.tsx",
+        "action": "create",
+        "change": "The form-level error or success line above a form's actions, in --color-negative or --color-text-muted, associated with the form through role and aria-live so a state change is announced.",
+        "why": "The tenth primitive. It is what makes a rate-limited sign-in and a wrong password say the same thing in the same place, and it is the only element that reports a failure with no field to attach it to."
+      },
+      {
+        "path": "tests/setup.ts",
+        "action": "create",
+        "change": "Imports @testing-library/jest-dom/vitest once and does nothing else. Registered as vitest's single setupFiles entry.",
+        "why": "The matcher set must be installed once for the component tests and never for the integration tests, or every PGlite test pays for a DOM environment it does not use."
+      },
+      {
+        "path": "tests/helpers/pglite.ts",
+        "action": "create",
+        "change": "Builds a fresh in-memory PGlite, wraps it with `createDatabase({pglite})` and runs `migrate()` against it. Exported as a per-file factory so each integration test file gets an empty database. No file touches the network or a real Postgres.",
+        "why": "IAC-11, and conventions.md's rule that an integration test needing a network is a bug in the test. createDatabase taking a driver is what makes this possible without a mock."
+      },
+      {
+        "path": "tests/helpers/request.ts",
+        "action": "create",
+        "change": "The request-scope boundary the action tests need: an in-memory cookie store installed with `vi.mock('next/headers')`, a captured-redirect stub for `next/navigation`, and helpers to read the cookies a Server Action wrote and to re-present a captured cookie value on a later call. Used by tests/integration/session.test.ts, rate-limit.test.ts and settings.test.ts.",
+        "why": "`cookies()` from next/headers throws outside a request scope and `redirect()` throws NEXT_REDIRECT, so an action called directly in vitest cannot set a cookie or redirect without this. The proposal named no such boundary, which is why its AC-5 and AC-6 were unrunnable as written."
+      },
+      {
+        "path": "tests/lib/auth.test.ts",
+        "action": "create",
+        "change": "Unit tests with no HTTP surface: a hash verifies against its own password and not another; the stored string round-trips N, r and p so they can be raised later without invalidating existing hashes; resolveSession returns nothing for an expired row and deletes it; checkRateLimit returns 'account' at exactly the sixth failure and 'source' at the source threshold independently of the account count; checkRateLimit with an ABSENT address never returns 'source'; rows older than the window are deleted by checkRateLimit; and keyFor/sourceFor are HMAC, so the same email under a different key produces a different digest.",
+        "why": "The parts of auth with no HTTP surface, and the parts QA cannot see from a browser — including the absent-address rule, which is a decision this order makes and must be pinned."
+      },
+      {
+        "path": "tests/lib/env.test.ts",
+        "action": "create",
+        "change": "With NODE_ENV=production and DATABASE_URL unset, loading env throws a message naming DATABASE_URL (and each other missing required variable). With nothing set in development, the resolved config is the documented defaults and the boot log names each one.",
+        "why": "IAC-9, which no browser can reach."
+      },
+      {
+        "path": "tests/integration/migrations.test.ts",
+        "action": "create",
+        "change": "Against a fresh PGlite: the migration list applies to an empty database and every table exists; running migrate() again applies nothing and inserts no second journal row; the advisory lock is actually taken and released (asserted by observing the lock through pg_locks during a call, not merely that two calls do not crash); two concurrent migrate() calls apply each migration exactly once; and the lock is released even when a migration throws.",
+        "why": "IAC-3's re-apply and lock clauses. The lock assertion is deliberately about the lock rather than about the outcome, because a single PGlite connection serialises two concurrent calls by itself — a test that only counted applied migrations would pass against a no-op lock and prove nothing."
+      },
+      {
+        "path": "tests/integration/health.test.ts",
+        "action": "create",
+        "change": "The route's exported GET is called directly as `GET(new Request('http://localhost/api/health'))`: 200 with status, database and a positive latencyMs against a live PGlite; 503 naming the failure when the query throws; and a full-body assertion that the connection string and the underlying driver error text appear in neither response.",
+        "why": "IAC-2 in full. This is the one surface the harness can genuinely drive at HTTP level, which is exactly why it is specified this way and the other three are not."
+      },
+      {
+        "path": "tests/integration/session.test.ts",
+        "action": "create",
+        "change": "Sign up through the action against the fresh PGlite with the request helper's cookie store, then: assert the raw cookie value appears in no column of any table (a full-database text sweep, not a spot check); assert the cookie the action wrote carries httpOnly, Secure and SameSite=Lax; a session past expires_at is refused; after signOut the row is gone and re-presenting the captured cookie is unauthenticated; two concurrent signUp calls with one address produce exactly one user row and one field error rather than a thrown 500; and a valid session resolves to its user.",
+        "why": "IAC-5 and IAC-6, TR-10's replay clause, and the duplicate-sign-up race, which is only ever exercised by a concurrency test."
+      },
+      {
+        "path": "tests/integration/rate-limit.test.ts",
+        "action": "create",
+        "change": "Six wrong passwords for one account inside the window: the sixth is refused, the failure rows are present, and a correct password immediately afterwards is accepted. The typed results returned for an unknown email, a wrong password and a rate-limited attempt are compared with a strict deep equality and asserted equal, and the message each renders is compared byte for byte. The failure table is asserted to hold no plaintext email and no plaintext address, and the digest is asserted to differ under a different HMAC key.",
+        "why": "IAC-7 and TR-11. A Server Action invoked directly has no HTTP status, so the comparable thing is the returned result and the rendered message; the HTTP-level half of the same requirement is carried by QA against the running app, where both cases are real HTTP responses. AC-7 says so."
+      },
+      {
+        "path": "tests/integration/settings.test.ts",
+        "action": "create",
+        "change": "updateProfile changes the display name and default currency; the new name is what a subsequent read of the user returns; saving 'usd' reads back 'USD'; and a signed-out call to the action is refused.",
+        "why": "IAC-8, plus the authorisation check on a write. The proposal's version of this test also asserted what the next group would be created in — there is no group table and no create-group action in this ticket, so that clause had nothing to assert against and would have failed for a reason unrelated to the product."
+      },
+      {
+        "path": "tests/components/ui.test.tsx",
+        "action": "create",
+        "change": "jsdom, no database and no request scope. Against the presentational layer only: Button renders an accessible name and never suppresses its focus ring; Input has a visible label and never relies on a placeholder alone; Field wires aria-describedby and aria-invalid to its control; FormMessage announces through role and aria-live; EmptyState keeps the no-data-yet and no-matches kinds distinct; Skeleton renders no animation; Dialog traps focus while open, returns focus on close and cancels on Escape; Shell renders exactly one `<main>` landmark and a link to the profile; HomeEmpty renders exactly one h1 and the exact docs/ui.md string \"You're not in any groups yet.\" with a single Create group action.",
+        "why": "IAC-10's structural half. The proposal specified rendering the four screens themselves, which cannot work: the shell awaits requireUser(), @testing-library/react cannot render an async Server Component, and importing a page constructs a real PGlite at import time. Splitting the assertion onto the extracted presentational components keeps the bar this ticket sets for every later screen without a test that fails for harness reasons."
+      }
+    ],
+    "tests": [
+      {
+        "path": "tests/lib/env.test.ts",
+        "action": "create",
+        "cases": [
+          "production with DATABASE_URL unset throws naming DATABASE_URL",
+          "production names every missing required variable, not just the first",
+          "development with nothing set resolves the documented defaults",
+          "the development boot log names each default it used"
+        ]
+      },
+      {
+        "path": "tests/lib/auth.test.ts",
+        "action": "create",
+        "cases": [
+          "a hash verifies against its own password and rejects another",
+          "the stored hash string carries N, r and p so they can be raised later",
+          "verifyPassword rejects a hash whose salt does not match",
+          "resolveSession returns nothing for an expired row and deletes it",
+          "checkRateLimit returns account at exactly the sixth failure in the window",
+          "a correct password is accepted with the account limit reached",
+          "checkRateLimit returns source at the source threshold independently of the account count",
+          "checkRateLimit never returns source when no address was determined",
+          "checkRateLimit deletes rows older than the window before counting",
+          "keyFor is HMAC-keyed: the same email under a different key yields a different digest"
+        ]
+      },
+      {
+        "path": "tests/integration/migrations.test.ts",
+        "action": "create",
+        "cases": [
+          "the migration list applies to an empty database and every table exists",
+          "re-applying the list applies nothing and writes no second journal row",
+          "the advisory lock is held for the duration of the call and observable while held",
+          "two concurrent migrate calls apply each migration exactly once",
+          "migrate releases the advisory lock even when a migration throws"
+        ]
+      },
+      {
+        "path": "tests/integration/health.test.ts",
+        "action": "create",
+        "cases": [
+          "GET returns 200 with status, database and a positive latencyMs",
+          "a failing query returns 503 naming the failure",
+          "the connection string appears in neither body",
+          "the underlying driver error text appears in neither body"
+        ]
+      },
+      {
+        "path": "tests/integration/session.test.ts",
+        "action": "create",
+        "cases": [
+          "the raw cookie token appears in no column of any table",
+          "the session cookie the action writes is httpOnly, Secure and SameSite=Lax",
+          "a valid session resolves to its user",
+          "a session past its expiry is refused",
+          "sign out deletes the row and re-presenting the old cookie is unauthenticated",
+          "two concurrent sign-ups with one address create exactly one user and one field error, and neither throws"
+        ]
+      },
+      {
+        "path": "tests/integration/rate-limit.test.ts",
+        "action": "create",
+        "cases": [
+          "the sixth failed sign-in inside the window is refused",
+          "a correct password on the next attempt is accepted",
+          "unknown email and wrong password return deeply equal typed results",
+          "a rate-limited attempt is deeply equal to both of those",
+          "the rendered message is byte-identical across all three cases",
+          "the failure table stores no plaintext email and no plaintext address",
+          "the stored digests change when the HMAC key changes"
+        ]
+      },
+      {
+        "path": "tests/integration/settings.test.ts",
+        "action": "create",
+        "cases": [
+          "display name and default currency are saved",
+          "the saved name is what the user then reads back",
+          "saving 'usd' reads back 'USD'",
+          "a signed-out call to updateProfile is refused"
+        ]
+      },
+      {
+        "path": "tests/components/ui.test.tsx",
+        "action": "create",
+        "cases": [
+          "every interactive primitive has an accessible name",
+          "no primitive suppresses its focus ring",
+          "Field wires aria-describedby and aria-invalid to its control",
+          "FormMessage announces through role and aria-live",
+          "a placeholder is never the only label",
+          "EmptyState keeps the no-data-yet and no-matches kinds distinct",
+          "Skeleton renders no animation",
+          "Dialog traps focus while open, returns focus on close and cancels on Escape",
+          "Shell renders exactly one main landmark",
+          "HomeEmpty renders exactly one h1 and the exact docs/ui.md empty-state string with a single Create group action"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "On a clean checkout with no build step run first, `npm ci --ignore-scripts` succeeds, `tsc --noEmit` and `eslint .` pass, `vitest run` passes, and every sdlc:* script is non-trivial — `node .sdlc/bin/verify-is-real.mjs` exits 0 with sdlc:seed among them. `next build && next start --port 3000` then answers on port 3000.",
+        "how_to_verify": "Run `bash .sdlc/bin/install-deps.sh --ignore-scripts && npm run sdlc:verify && node .sdlc/bin/verify-is-real.mjs`, then `npm run sdlc:serve` in the background and `npm run sdlc:ready`. The typecheck half in particular is run BEFORE any `next build`, which is why next-env.d.ts is committed.",
+        "source": "IAC-1",
+        "verify": "test"
+      },
+      {
+        "id": "AC-2",
+        "check": "GET /api/health returns 200 with {status, database, latencyMs} where latencyMs is a positive real measurement of a real query, and 503 naming the failure when the database cannot be reached. Neither body, on any path, contains the connection string or the driver's own error text.",
+        "how_to_verify": "tests/integration/health.test.ts calls the route's GET directly and asserts all four, including a full-body assertion that both strings are absent. QA additionally curls the endpoint against the running app.",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "check": "With DATABASE_URL unset the app runs on in-process PGlite and applies the migration list on boot; with it set it uses that Postgres through the same list. Applying to an up-to-date database re-applies nothing, and two concurrent migrate() calls apply each migration exactly once because the advisory lock is taken before the applied set is read.",
+        "how_to_verify": "tests/integration/migrations.test.ts, asserting the lock is observable while held rather than only counting applied migrations — a single PGlite connection serialises two calls by itself, so an outcome-only assertion would pass against a no-op lock.",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "A person signs up with an email and password at /sign-up and lands signed in on /, which shows the empty state \"You're not in any groups yet.\" with Create group as the single action and the quieter invite-link line. With no session, / redirects to /sign-in.",
+        "how_to_verify": "Sign up through the running app at /sign-up and confirm the landing page, the exact empty-state string and the single action; then clear the cookie, open / and confirm the redirect.",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-5",
+        "check": "The password is stored only as a salted scrypt hash, and only the SHA-256 of the session token is persisted: the raw cookie value appears in no column of any table, the cookie is httpOnly, Secure and SameSite=Lax, and a session past its expiry is refused.",
+        "how_to_verify": "tests/integration/session.test.ts through the request helper's cookie store — a full-database text sweep for the raw token rather than a spot check, and the Set-Cookie attributes the action actually wrote. Secure is unconditional; no environment-dependent exception exists in the code.",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "id": "AC-6",
+        "check": "Signing out deletes the session row on the server and clears the cookie, and replaying the old cookie afterwards is unauthenticated.",
+        "how_to_verify": "tests/integration/session.test.ts: sign out, assert the row is gone, re-present the captured cookie to requireUser() and assert the redirect. QA does the same through the browser.",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "id": "AC-7",
+        "check": "Six failed sign-ins for one account inside a 15-minute sliding window are refused and a correct password on the next attempt is accepted, and a caller cannot distinguish an unknown email, a wrong password and a rate-limited attempt: the typed results are deeply equal and the rendered message is byte-identical.",
+        "how_to_verify": "tests/integration/rate-limit.test.ts compares the three returned results with strict deep equality and the three rendered messages byte for byte. A Server Action invoked directly has no HTTP status, so the status half of TR-11 is carried by QA, which performs all three cases as real HTTP requests against the running app and compares both status and body character for character.",
+        "source": "IAC-7",
+        "verify": "test"
+      },
+      {
+        "id": "AC-8",
+        "check": "At /settings a person edits their display name and default currency and saves; the new name appears everywhere the user is shown, including the top bar, and the currency is stored normalised to three uppercase letters.",
+        "how_to_verify": "Edit both fields at /settings in the running app, save, and confirm the new name in the top bar on / and on /settings. tests/integration/settings.test.ts covers the normalisation and the authorisation check.",
+        "source": "IAC-8",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-9",
+        "check": "With nothing set the app boots on documented local defaults and logs which it is using; with NODE_ENV=production and DATABASE_URL unset, startup stops with a message naming that variable and every other missing required variable.",
+        "how_to_verify": "tests/lib/env.test.ts for both halves. The production half is only reachable from a test — the running app is booted in development.",
+        "source": "IAC-9",
+        "verify": "test"
+      },
+      {
+        "id": "AC-10",
+        "check": "Every screen added here has exactly one h1, correct heading order, a label on every control, a visible focus ring at every tab stop, and designed empty, loading and error states per docs/ui.md.",
+        "how_to_verify": "tests/components/ui.test.tsx covers the structural half on the presentational layer (the screens themselves are async Server Components and cannot be rendered by testing-library, and importing them would construct a real database). QA tabs each of the four screens against the running build for the focus ring at every stop, the single h1 and the three states.",
+        "source": "IAC-10",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-11",
+        "check": "Integration tests run against a fresh in-process PGlite with no network: the migrations apply to an empty database, re-applying is a no-op, the health endpoint answers both 200 and 503, and the session and rate-limit rules above hold.",
+        "how_to_verify": "`npm test` on a runner with no DATABASE_URL and no Postgres installed; the suite passing at all is the proof, since every case would fail on a network dependency.",
+        "source": "IAC-11",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "The app is already built and running on http://localhost:3000 by the pipeline. Confirm `npm run sdlc:ready` exits 0 before touching a browser. If it does not, stop and report blocked — the rest of this script assumes a live app.",
+      "curl -i http://localhost:3000/api/health. Expect 200 and a body of {status, database, latencyMs} with latencyMs > 0. Then confirm no part of the body contains 'postgres://', a password or a host with credentials.",
+      "Open http://localhost:3000/ with no cookie. Expect a redirect to /sign-in — not a rendered page and not a 500.",
+      "Open /sign-in. Tab through the whole form. At every stop confirm a visible 2px focus ring, and confirm the page has exactly one h1. Confirm the email input is focused on arrival.",
+      "Sign in with an email that does not exist, e.g. nobody@example.invalid. Note the exact status code and the exact message text. Sign out, then sign in with a registered email and a deliberately wrong password. Compare BOTH the status codes and the messages character for character — they must be identical, with no hint that the account exists.",
+      "Sign in six times in a row with a registered email and a wrong password, then once more with the CORRECT password. Expect the correct password to be accepted. Report it if a legitimate sign-in is locked out — that is the assertion tests/integration/rate-limit.test.ts exists to protect.",
+      "Sign up at /sign-up with a fresh address (qa1@example.invalid) and a password. Expect to land signed in on / with the empty state \"You're not in any groups yet.\", a single Create group action and exactly one h1.",
+      "Use the Create group action. It is a link into a screen this ticket does not build (groups are piece 2) — confirm it is present and labelled, and do NOT report its destination as a bug.",
+      "Go to /settings. Change the display name to 'QA Tester' and the default currency, save, and confirm the new name appears in the top bar and on /settings. Then force a failure (submit with the name emptied) and confirm the error sits next to the field, what you typed elsewhere is kept, and no raw error or stack trace is shown.",
+      "Sign out through the top bar. Confirm the cookie is cleared, then re-paste the old cookie value into the browser and open / — expect the sign-in redirect, not the home screen.",
+      "Submit the sign-up form twice in quick succession (two tabs, or a slow-cpu throttle with a repeated primary-button press). Expect the button to disable and read 'Creating account…', exactly one account to exist, a clear field-level message rather than a 500, and no unhandled error.",
+      "On each of the four screens, zoom to 200% and confirm no horizontal scrolling and no lost content; then resize to 360px wide and confirm the sign-in and sign-up cards span the width with no card border and the home empty state stays readable.",
+      "Do NOT report as bugs in this ticket: the source-address rate limit being inert (there is no proxy in front of the app here, and that is a documented decision, not an omission); sign-out living outside a profile menu (no menu primitive exists yet); money, dialog and skeleton primitives having no or partial callers; and anything about groups, invites or amounts."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "scripts/seed.mjs connects to the database and reports which driver is in use, as the proposal specified.",
+        "rejected_because": "`sdlc:seed` is `node scripts/seed.mjs` and nothing in this order compiles TypeScript for it, so the script cannot import src/db/client.ts at all; and even if it could, ADR-0007 states that a seed must reach the database through the app's HTTP endpoint rather than around it, and ADR-0002 states that a second process opening the same PGlite data directory corrupts it. With PGLITE_DATA_DIR unset the script would open a different, empty in-memory database and report nonsense; with it set, it would be exactly the corruption both ADRs name. It is also the proposal's own reasoning turned against it: a database handle is not what makes a seed real."
+      },
+      {
+        "approach": "Leave sdlc:seed as the echo stub the issue's Out of scope section asks for and let this branch's CI decide.",
+        "rejected_because": "I re-ran `.sdlc/bin/verify-is-real.mjs`'s own gatingScripts()/isTrivialScript() against the exact scripts map this order proposes: the trivial set is ['sdlc:seed'] with the stub and empty without it. ci-verify runs that guard inside the Unit tests step with pipefail and fails the job on any check outcome of 'failure'. The branch whose subject is that CI works would be the branch that turns it red, and the next council would re-derive exactly this."
+      },
+      {
+        "approach": "Plain SHA-256 of the email and the source address in login_attempts, as the proposal specified.",
+        "rejected_because": "The reasoning transfers from the session token and fails on both other values. A 32-byte random token has 2^256 entropy, so its digest is one-way; an IPv4 address is a 2^32 space that commodity hardware exhaustes in minutes and an email is recoverable from any wordlist of the format. 'No plaintext' would be true and the proposal's 'un-enumerable' false, and the test it specified ('the failure table stores no plaintext email') would pass unchanged. Both columns are keyed with HMAC-SHA-256 over a secret src/lib/env.ts owns, which costs one line and makes the claim true."
+      },
+      {
+        "approach": "Use Drizzle's built-in migrator instead of a hand-written one.",
+        "rejected_because": "It reads the applied set and then applies, with no advisory lock around the pair, so two cold starts can both read 'pending' and both apply. IAC-3 asks for the lock specifically, so the lines that take it, re-read inside it and release in a finally are the requirement, not a preference."
+      },
+      {
+        "approach": "Use citext for the email column so uniqueness is case-insensitive at the database rather than by lowercasing in the action.",
+        "rejected_because": "It makes the uniqueness guarantee depend on an extension PGlite does not necessarily carry, so the local guarantee and the production one would differ — precisely the divergence ADR-0002 warns about. Storing the trimmed, lowercased value makes the constraint plain `unique` and identical on both."
+      },
+      {
+        "approach": "Hard-lock an account for the window after N failures, returning 429 once it trips.",
+        "rejected_because": "It contradicts the second sentence of IAC-7 — a correct password on the next attempt is accepted — and it hands an attacker a denial of service against a named user for the price of five guesses. The account limit here refuses wrong passwords without ever locking a correct one out; only the source-keyed limit hard-refuses, because there the threat is flooding rather than guessing."
+      },
+      {
+        "approach": "Put unknown source addresses into one shared bucket so the source limit applies everywhere.",
+        "rejected_because": "`next start` on loopback sets neither x-forwarded-for nor x-real-ip, so in QA and in local development every request has the same absent address; a shared bucket would let one flood refuse every legitimate user of a deployment — the denial of service alternatives reject above — and would make QA's own repeated sign-ins trip a global lock. Exempting unknown sources means the source limit is inert until a proxy sets the header, which is stated in the code, in residual_risks and in the QA script's do-not-report list rather than left to be discovered."
+      },
+      {
+        "approach": "Render the four screens directly in tests/components/screens.test.tsx, as the proposal specified.",
+        "rejected_because": "The signed-in shell awaits requireUser(), @testing-library/react cannot render an async Server Component, and importing any page transitively constructs a real PGlite at import time. A test written that way fails for reasons that have nothing to do with the product. The presentational markup is extracted into shell.tsx and home-empty.tsx instead, which keeps the accessibility assertion this ticket sets for every later screen and is actually runnable."
+      },
+      {
+        "approach": "An auth library (Auth.js/NextAuth) for sessions and rate limiting.",
+        "rejected_because": "Already decided and recorded in project.md and ADR-0005: the requirement is an opaque token in an httpOnly cookie plus a table, and a framework brings a configuration surface, a callback model and a version history each pipeline agent would have to learn. Re-deciding it here would re-litigate an ADR, which is what .sdlc/memory/decisions/README.md exists to prevent."
+      }
+    ],
+    "assumptions": [
+      "That verify-is-real.mjs's current behaviour is the intended one and the issue's 'sdlc:seed stays a stub' is the stale half. I verified the code path by running the guard's own gatingScripts/isTrivialScript against the exact scripts this order proposes, so the CI consequence is established; what I cannot establish is which of the two the human intended. If the stub is genuinely wanted, the fix is a one-line change in .sdlc/config.yml or verify-is-real.mjs, both reserved paths — which is itself the reason the script is the wrong half of the disagreement.",
+      "That `pg_advisory_lock` and `hashtext` are available on PGlite 0.5.8. PGlite is Postgres compiled to WASM and ADR-0004 assumes the lock works, but there is no database in this environment to run it against. If either is missing, the fallback is a `select ... for update` on a migrations row held in the transaction, which serialises the same critical section on both backends; that changes one function in src/db/migrate.ts and nothing else in this order moves.",
+      "That `drizzle-kit generate` produces SQL that runs unchanged on PGlite as well as on Neon 16. If it emits anything PGlite rejects, the migration is hand-edited in drizzle/ and the schema stays the source of truth — which tests/integration/migrations.test.ts will catch on the first CI run rather than in production.",
+      "That the QA runner's browser treats http://localhost as a secure context and will therefore store a Secure cookie, which TR-10 requires unconditionally. Chrome and Firefox both do. If the runner's browser does not, this order does not open an exception: that is a finding to report, not a deviation to introduce, and the local development behaviour of omitting Secure is explicitly not authorised by this order.",
+      "That 'six failed sign-ins are refused and a correct password on the next attempt is accepted' means the account limit refuses wrong passwords without locking the account out — the only reading under which both sentences hold. The alternative (a hard lockout) fails the second sentence. The source-address limit's hard refusal and its exemption for undetermined addresses are this order's decision and are stated in approach, in src/lib/auth.ts and in the QA script.",
+      "That the rate-limit constants are the plan's to set: ACCOUNT_LIMIT = 6 (from IAC-7), SOURCE_LIMIT = 20, WINDOW = 15 minutes sliding. They are named rather than left to the implementer because 'inside the window' with no duration cannot be tested.",
+      "That seeding nothing is an acceptable state for sdlc:seed in this ticket — that the verb's job here is to be real, to be safe, and to say plainly that fixtures are piece 9's. A users-only seed would be half a fixture set and would collide with piece 9's shape.",
+      "That Next 16.3's instrumentation register() hook runs once per server start in a production build on Vercel rather than per request. If it runs per request, migrate() must be memoised behind a module-level promise; that guard is specified in src/db/client.ts regardless because it is three lines.",
+      "That installing with --ignore-scripts leaves every dependency usable — the assumption the whole stack rests on and the reason Prisma and Argon2 were rejected in the project brief. Drizzle, PGlite, Neon, Zod and Tailwind are pure JavaScript; the first CI run on this branch is what proves it rather than my reading of their manifests."
+    ],
+    "unknowns": [
+      "Whether a Vercel deployment can hold the Neon Pool singleton across a cold start well enough for the advisory lock to be meaningful there. Nothing in this repository can answer it — there is no Vercel project and no Neon database yet, and project.md records both as open questions for a human. What this ticket guarantees is that the same migration list and the same lock run in every environment, which is the part that is testable.",
+      "Whether PGlite's single-connection model makes IAC-3's two-concurrent-cold-starts case genuinely provable. The integration test asserts the advisory lock is observable while held, which is the thing the code is actually responsible for; it cannot prove true multi-connection contention, because one PGlite serialises two calls regardless. The honest claim is that the lock is taken and the applied set is re-read inside it, and the contention itself is only provable on Neon.",
+      "Which currencies must be supported at launch. project.md records this as an open question and assumes any ISO 4217 code; the settings select will offer a list, and the wrong list is a product decision this ticket cannot make.",
+      "Whether the top bar's profile affordance should be a menu or a direct link. docs/ui.md's Navigation example mentions a profile link and its Destructive-action section implies a menu; with four screens and no menu primitive in the design system, this order renders a profile link plus a sign-out control and revisits it when a menu is genuinely needed. QA is told not to report the missing menu as a defect.",
+      "Whether ci-verify's absent build step leaves any hole in what the branch proves. `.sdlc/config.yml` sets verify.build to the empty string and ci-verify.yml skips the Build step when it is, so `next build` runs only inside sdlc:serve, which QA's env.boot invokes and ci-verify does not. AC-1 is therefore proved in two halves and names both."
+    ],
+    "risks": [
+      "This order knowingly contradicts a line in the issue's Out of scope section: scripts/seed.mjs exists and is non-trivial where the issue says it stays a stub. It is deliberate, the reasoning was verified against the guard's own code, and it is in understanding so nobody has to rediscover it. The exposure is pipeline-wide rather than branch-wide, since hasProductCode() counts any tracked file outside .sdlc/, .github/, docs/, bin/sdlc and package.json — which is an argument for the maintainer fixing the reserved file rather than for this ticket bending around it. If the arbiter's reader disagrees, the alternative is a human changing one reserved file, and until that happens this branch's CI is red.",
+      "The build that CI proves is typecheck and lint, not `next build`. verify.build is empty in a reserved config, so the production build is proved by QA against the same commit rather than by ci-verify. AC-1 is written as two halves for that reason.",
+      "Two of the ten primitives — money and dialog — have no caller in this ticket; skeleton has exactly one, in (app)/loading.tsx. Building them is what the ticket asks for and what keeps the design system's floor in one place; the cost is code nothing exercises yet, stated per file rather than left to be discovered.",
+      "SCrypt at N=2^17 takes roughly 128 MB and a quarter second per verification (ADR-0006). That makes sign-in the most expensive thing the app does and is the reason the source limit skips verification entirely and the reason the password input is length-bounded. It also means the auth and rate-limit suites take tens of seconds, and a reviewer should not read that as a hang.",
+      "Migrations applied on boot mean the first request after a deploy pays the cost and a failed migration is a boot error rather than a deploy error. That is ADR-0004's stated trade and it is correct, but it means a bad migration is discovered at runtime on Vercel rather than in CI, and CI only proves the migrations run on PGlite.",
+      "The source-address rate limit is inert until a proxy sets x-forwarded-for, which in practice means it does nothing on a Vercel preview or production only if Vercel's proxy sets the header. The alternative — a shared bucket for undetermined addresses — was rejected because it turns one flood into a global lockout. The honest cost is a CGNAT-shaped one in reverse: when a proxy IS present and many users share one address, that shared bucket is refused once it trips. residual_risks names it and QA is told not to report it.",
+      "The health endpoint is unauthenticated by design, because a readiness poll cannot hold a session. It runs one indexed query and returns no data, so it is not an information leak — but it is a public route on a deployed app, and QA should confirm it leaks nothing beyond status and latency.",
+      "This ticket adds no money type, so the rule that makes TR-2 enforceable — a money value cannot be given a number without a type error — does not exist yet. It arrives with src/lib/money.ts in piece 4. Until then nothing in the codebase can be wrong about money, because nothing in it is money.",
+      "The route group (app) is what makes requireUser() run once for the signed-in shell. A later ticket that adds a screen outside the group without its own check would bypass it. The group is easy to forget precisely because it is invisible in a URL; a reviewer should check every new page lands inside it."
+    ],
+    "out_of_scope": [
+      "Groups, members, invites, placeholder members, roles and every group's data — piece 2, per the ticket. The home screen's Create group action is a link into a screen that does not exist yet, and the ticket's own empty-state wording requires it to be there.",
+      "POST /api/dev/seed as a route handler, any fixture users, groups, expenses, payments or placeholder member, and the full idempotent seed — piece 9. scripts/seed.mjs exists in this ticket only so the verb is real and safe; it checks that the app is up and writes nothing, and piece 9 replaces its body with the call ADR-0007 specifies.",
+      "Any money value. No amount is parsed, split, formatted or rendered here, so src/lib/money.ts, the split types and src/lib/balances.ts are all piece 4's. The money UI primitive formats a bigint but nothing calls it yet.",
+      "Password reset and account deletion — the spec lists them as not in this version.",
+      "Session rotation on use and an absolute session cap beyond the 30-day cookie maxAge. The cookie expires and signing out revokes it, which is what TR-10 requires; shortening a stolen cookie's life is a defensible later change and naming it here means it is a decision rather than an oversight.",
+      "The recorded decision for this issue (store the split rule with the expense, and rewrite TR-4 so an edit replaces that expense's stored payers and shares in one transaction). It binds pieces 3 and 4 and this ticket pre-empts none of it: there is no expense table, no split type and no amount in this data model. Naming it so the omission is deliberate rather than an oversight.",
+      "A Vercel project and a Neon database, neither of which exists. TR-27's README deploy guide is piece 9's; this ticket adds only the environment-variable table IAC-9 requires.",
+      "Changing .sdlc/config.yml — in particular qa_auth.mode, which stays `none`, and verify.build, which stays empty. Both are reserved paths and the maintainer's to change. QA drives the sign-up path, exactly as the issue says it will."
+    ],
+    "confidence": 78,
+    "confidence_rationale": "The root cause is verified, not inferred: the repository is empty by design, and I re-ran `.sdlc/bin/lib/guards.js`'s own gatingScripts() and isTrivialScript() against the exact package.json this order produces, confirming both halves of the one novel claim — that a stub sdlc:seed fails ci-verify, and that the HTTP liveness body this order substitutes does not. That claim is the plan's most consequential decision and it is the one thing the proposal and the critique disagreed about in method while agreeing on in substance; both arrived at it independently and I confirmed it a third time. The theme-token counts I extracted from docs/ui.md directly. Everything else is greenfield against a written architecture (project.md, seven ADRs, docs/ui.md) with no existing code to break, and the whole design system exists in the same document the screens must follow. What holds the number below 90 is three things I cannot check from here and have each given a one-line fallback rather than a second council: whether pg_advisory_lock and hashtext are available on PGlite 0.5.8, whether drizzle-kit's generated SQL runs unchanged on PGlite, and whether the QA browser will store a Secure cookie over http://localhost — the third I have decided rather than left open, by refusing the exception the proposal left to the implementer. What would move it up: a single CI run of this branch, since AC-1, AC-3 and AC-11 between them would exercise all three of those unknowns in about four minutes. What would move it down: if the source-address exemption turns out to leave TR-11's per-address half unenforced in the one environment QA can observe, which is a real limitation rather than a defect, and is why residual_risks and the QA script both name it.",
+    "debate_summary": "The critique was right about the diagnosis and right about three blocking defects, wrong about one blocking defect's proposed fix, and noisy in a way that was worth the noise.\n\n**Accepted — three blocking findings, all verified by me independently rather than taken on trust.**\n\n(1) The proposal's scripts/seed.mjs cannot be written as specified. `sdlc:seed` runs `node scripts/seed.mjs`, nothing in the plan compiles TypeScript, so the script cannot import src/db/client.ts — and ADR-0007 states a seed must reach the database through the app's HTTP endpoint, ADR-0002 states a second process on the same PGlite directory corrupts it. This is the finding that matters most, because the proposal's whole seed decision rested on it. I took the critique's remedy rather than the proposal's: an HTTP liveness check against /api/health that needs the app up (ADR-0007's own stated dependency), touches no database handle, and cannot corrupt anything. I re-ran isTrivialScript() on that body to confirm CI stays green without this branch inventing half a fixture set. The one thing I softened is the critique's parenthetical that the liveness body 'cannot corrupt anything' is right, but it is also not a seed — so the file says in a comment that piece 9 replaces it, and out_of_scope names that as the owner.\n\n(2) next-env.d.ts is missing from files[], and `tsc --noEmit` is the FIRST command of sdlc:verify. I checked the published next@16.3.0 tarball: `declare module '*.css'` lives in package/types/global.d.ts and is reachable only through next-env.d.ts's `/// <reference types=\"next\" />`. Next generates that file on the first build, and ci-verify never builds. The second half — that Next rewrites tsconfig.json on the first build — is also true and I specified the fields that must survive the rewrite rather than leaving the implementer to discover two configs.\n\n(3) AC-5, AC-6 and AC-7 were written in terms of HTTP status codes, Set-Cookie headers and byte-identical response bodies, and the harness the plan specifies cannot produce any of them: `cookies()` throws outside a request scope and `redirect()` throws NEXT_REDIRECT, so an action called directly returns a plain object with no status. The plan named no mock boundary anywhere. I added tests/helpers/request.ts as that boundary and split each criterion by what can actually be proved where: AC-5 and AC-6 assert the cookie attributes the action wrote through an in-memory store; AC-7's vitest half asserts deep equality of the three returned results and byte equality of the three rendered messages, and its HTTP-status half moves to QA, which performs all three cases as real requests against the running app. AC-2 stays a test because the route handler's GET is a directly callable function — the proposal drew that contrast correctly and I kept it.\n\n**Accepted — the major findings, each cheaper than it looked.** HMAC rather than plain SHA-256 for the email and address columns (finding 5) is one line in auth.ts and makes the proposal's 'un-enumerable' claim true instead of merely asserted; the test name changes to match. The source address has no defined origin on a loopback-bound `next start` (finding 7), and I had to make a call the critique left open: unknown sources are EXEMPTED from the source limit rather than pooled, because pooling turns one flood into a global lockout — the denial of service the plan's own alternatives reject — and would make QA's own repeated sign-ins trip it. That makes the source limit inert until a proxy sets the header, which is stated in approach, in the code, in residual_risks and in the QA script's do-not-report list. typescript-eslint's recommended-type-checked needs `projectService: true` (finding 6) — specified. The sign-up duplicate check is read-then-insert and its 23505 would surface as a 500 on exactly the double-submit QA is asked to perform (finding 9) — `onConflictDoNothing` makes the constraint authoritative, with a concurrency test. The theme's 'eleven colours, five spacing steps, six text sizes' is wrong in three places (finding 8): I extracted them from docs/ui.md and the counts are ten, six and five, now listed by name. The screens test cannot render an async shell or import a page that constructs a real PGlite (finding 4) — extracting shell.tsx and home-empty.tsx keeps the accessibility assertion runnable. And the smaller ones: skeleton has a caller in (app)/loading.tsx so only two primitives are caller-less (10); the settings test asserted what a group would be created in when there is no group table (11); 'Secure except on localhost' was a security control left to the implementer at the moment a test fails (12) — now decided, unconditionally, because Chrome and Firefox both treat localhost as a secure context; ci-verify never runs next build (13) — now in risks and in AC-1's own wording; unbounded growth in two tables that only becomes visible on Neon (14) — pruning at the top of checkRateLimit and on expired-session resolve; an unnamed rate-limit window (15) — six, twenty and fifteen minutes, named; and default_currency with no normalisation (16) — uppercased in the action with a 'usd' reads back 'USD' case.\n\n**Dismissed — one finding, and here I disagree with the critique.** Finding 17 claims the exposure from a stubbed sdlc:seed is pipeline-wide, because hasProductCode() counts any tracked file outside a short exclusion list and plan/proposal.json is not excluded. I confirmed the code is right — `hasProductCode(['plan/proposal.json'])` is true — but the conclusion does not follow and I have not acted on it. This branch lands src/, so the guard enforces regardless of whether plan/ is tracked; and a docs-only or memory-only branch still carries no product code and still stands down. The trigger is 'this branch has code', which is a design the guard's own comment states deliberately. The finding's one real observation, that the exposure is not specific to this branch, I folded into risks[0] as a sentence arguing for the maintainer fix — which is a fair use of it, not a change to the plan.\n\n**Dismissed as preference or noise.** Several of the twelve missed_edge_cases are correct-but-not-blocking and I moved them rather than dismissing them: email trim (two accounts under one unique constraint), an unbounded password feeding scryptSync for a quarter second per attempt, and a display-name length bound all became one-line Zod constraints. Two I deliberately did not adopt: capping a stolen cookie's life by rotation on use (named in out_of_scope as a later decision rather than smuggled in — TR-10 requires expiry and revocation, which this has), and the browser back-stack and two-tab cases, which are browser behaviours rather than code defects and go to residual_risks. One I dismissed outright: regression risk 5's worry that a later piece calling sdlc:seed expecting fixtures will get a log line and exit 0. That is correct, and it is a real consequence — which is why out_of_scope names piece 9 as the owner of the real seed rather than pretending the ambiguity away.\n\n**Where the council genuinely disagreed, and where I landed.** The proposal and the critique agreed on the CI claim and disagreed on what to do about it, and the proposal's answer was the one place this order overrides both. Beyond that, the sharpest disagreement was over whether the seed contradiction is this ticket's problem at all. Both said yes. I agree, because the alternative is a red branch — but I took the critique's mechanism over the proposal's because the proposal's mechanism contradicted two accepted ADRs and could not physically be implemented, which is a stronger objection than 'the stub is the stale half' and I have said so in alternatives_considered.\n\n**What I added that neither of them raised.** tests/helpers/request.ts as an explicit request-scope boundary; the retention pruning on both tables; the rate-limit constants; the currency normalisation; and the decision to extract the shell and the home empty state as synchronous presentational components — which is what makes IAC-10's structural half runnable at all rather than aspirational.\n\n**Disagreement I am least sure of.** I have made two calls the issue did not ask me to make — exempting unknown source addresses from the rate limit, and leaving session rotation out of scope. Both are defensible and both are stated where an implementer will hit them, but a human who reads TR-11 as 'the source limit must bite everywhere' would disagree with the first, and I have put it in residual_risks and the QA script precisely so it is found rather than buried."
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-01T22:48:40.447Z",
+  "validated_ac_changes": []
 }
