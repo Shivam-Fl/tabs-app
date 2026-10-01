@@ -190,7 +190,7 @@
       "action": "-> planning"
     }
   ],
-  "resume_at": "maintainer",
+  "resume_at": null,
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -199,8 +199,8 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": "project",
-  "dispatched_stage": "project",
+  "stopped_at": null,
+  "dispatched_stage": "maintainer",
   "failure_packet": {
     "issue": 1,
     "head": null,
