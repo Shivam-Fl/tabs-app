@@ -442,7 +442,7 @@
           "Recording a payment — piece 7. This piece only reads the ledger.",
           "Search, filters and the feed screens — piece 8."
         ],
-        "issue": null
+        "issue": 8
       },
       {
         "title": "Settle up by recording a payment",
@@ -570,6 +570,7 @@
     4,
     5,
     6,
-    7
+    7,
+    8
   ]
 }
