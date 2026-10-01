@@ -271,7 +271,7 @@
           "POST /api/dev/seed and scripts/seed.mjs, which stay stubs — piece 9.",
           "Any money value. No amount is parsed, split or rendered until piece 4."
         ],
-        "issue": null
+        "issue": 3
       },
       {
         "title": "Create a group, see who is in it, and manage its membership",
@@ -565,5 +565,7 @@
     ],
     "deferred": []
   },
-  "children": []
+  "children": [
+    3
+  ]
 }
