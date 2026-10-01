@@ -375,7 +375,7 @@
           "Search, filters and the activity feed screens — piece 8.",
           "Balances, debts and payments — pieces 6 and 7."
         ],
-        "issue": null
+        "issue": 6
       },
       {
         "title": "Edit or delete an expense, and say exactly what changed",
@@ -568,6 +568,7 @@
   "children": [
     3,
     4,
-    5
+    5,
+    6
   ]
 }
