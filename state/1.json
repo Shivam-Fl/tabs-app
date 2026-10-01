@@ -126,7 +126,7 @@
       "action": "-> planning"
     }
   ],
-  "resume_at": "project",
+  "resume_at": null,
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -135,7 +135,7 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": "project",
+  "stopped_at": null,
   "dispatched_stage": "project",
   "failure_packet": {
     "issue": 1,
@@ -155,8 +155,5 @@
         "project:agent-runtime:a967b10a658ac5d4"
       ]
     }
-  },
-  "retry_after": "2026-10-01T22:30:45.050Z",
-  "retry_stage": "project",
-  "parked_at": "2026-10-01T21:50:45.286Z"
+  }
 }
