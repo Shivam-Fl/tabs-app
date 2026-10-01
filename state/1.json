@@ -1,7 +1,7 @@
 {
   "issue": 1,
   "pr": null,
-  "state": "planning",
+  "state": "needs-human",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -40,7 +40,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T21:38:57.002Z",
-  "updated_at": "2026-10-01T21:43:28.211Z",
+  "updated_at": "2026-10-01T21:43:48.263Z",
   "history": [
     {
       "at": "2026-10-01T21:38:59.967Z",
@@ -66,6 +66,11 @@
       "at": "2026-10-01T21:43:28.211Z",
       "agent": "project-planner",
       "action": "lock released"
+    },
+    {
+      "at": "2026-10-01T21:43:48.263Z",
+      "agent": "self-heal",
+      "action": "-> needs-human"
     }
   ],
   "resume_at": "project",
