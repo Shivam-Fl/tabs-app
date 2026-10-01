@@ -471,7 +471,7 @@
           "The feed screens that render this entry — piece 8; this piece writes the entry and the event kind, and the feed renders it when it lands.",
           "Paying through the app. Tabs records a payment, it does not move money; UPI, cards and webhooks are not in this version."
         ],
-        "issue": null
+        "issue": 9
       },
       {
         "title": "Find an expense from three months ago, and read what has happened",
@@ -571,6 +571,7 @@
     5,
     6,
     7,
-    8
+    8,
+    9
   ]
 }
