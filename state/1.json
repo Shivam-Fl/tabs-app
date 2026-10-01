@@ -146,7 +146,7 @@
       "action": "budget reset (was {\"plan\":1,\"ci\":0,\"review\":0,\"qa\":0})"
     }
   ],
-  "resume_at": null,
+  "resume_at": "maintainer",
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -155,7 +155,7 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": null,
+  "stopped_at": "project",
   "dispatched_stage": "project",
   "failure_packet": {
     "issue": 1,
