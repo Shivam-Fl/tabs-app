@@ -12,7 +12,6 @@
     "qa": 0
   },
   "attempt_run": null,
-  "halted": null,
   "pending": null,
   "work_order": null,
   "touch_paths": [],
@@ -84,7 +83,7 @@
       "action": "-> planning"
     }
   ],
-  "resume_at": "project",
+  "resume_at": null,
   "flow_plan": {
     "kind": "epic",
     "confidence": 90,
@@ -93,7 +92,7 @@
     "councils": {},
     "decided_at": "2026-10-01T21:39:21.193Z"
   },
-  "stopped_at": "project",
+  "stopped_at": null,
   "dispatched_stage": "project",
   "failure_packet": {
     "issue": 1,
@@ -111,8 +110,5 @@
       "run_url": "https://github.com/Shivam-Fl/tabs-app/actions/runs/36930120414",
       "prior_signatures": []
     }
-  },
-  "retry_after": "2026-10-01T22:03:44.894Z",
-  "retry_stage": "project",
-  "parked_at": "2026-10-01T21:43:45.133Z"
+  }
 }
