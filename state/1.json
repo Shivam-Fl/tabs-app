@@ -34,6 +34,14 @@
       "attempt": 1,
       "at": "2026-10-01T21:43:40.255Z",
       "digest": "The project stage failed and no known error pattern matched. The raw output is below."
+    },
+    {
+      "stage": "project",
+      "error_signature": "9c79545fc6d0e3ed",
+      "error_type": "agent-runtime",
+      "attempt": 1,
+      "at": "2026-10-01T21:50:40.793Z",
+      "digest": "The project stage failed and no known error pattern matched. The raw output is below."
     }
   ],
   "review_history": [],
