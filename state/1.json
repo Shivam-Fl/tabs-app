@@ -229,5 +229,341 @@
       "kind": "replan-project",
       "note": "Approve with two changes, both in the money core; keep everything else as it is. (1) Store the split rule with the expense, not only its result: the split type and the per-member inputs the person entered (exact amounts, percentages or shares, and who was included). The edit form must reopen showing exactly what was entered, and the activity entry for an edit must be able to say what changed (amount, payers, participants, split type). Balances still read only from the stored expense_payer and expense_share rows. Add it to the data model, the expense form in docs/ui.md, and an ADR. (2) Rewrite TR-4 and the matching invariant, which as written say an edit never changes a balance; that contradicts editing. The rule is: editing or deleting an expense replaces that expense's stored payers and shares in one transaction with its activity entry, so balances move by exactly the difference; and no balance ever changes except through a write to that expense or payment. In particular a change to the split algorithm or rounding rule never re-evaluates stored history."
     }
-  ]
+  ],
+  "breakdown": {
+    "epic": 1,
+    "understanding": "The architecture is decided and merged (#2), and the decision recorded on this epic — store the split rule with the expense, and rewrite TR-4 so an edit replaces the expense's stored payers and shares in one transaction — is already carried in `docs/trd.md`, `docs/ui.md` and ADR-0008/0011. So no piece has to re-decide it and no piece edits those documents. Two pieces owe it directly: the expense piece writes `split_type` and `expense_split_input` from the first expense (not from the edit piece, which would mean a migration over stored history), and the edit piece reads them back and diffs them into the activity entry. A planner reading an older copy of TR-4 will build the opposite of what was decided; that is called out in the edit piece's risk.\n\nI did not split the spec's five phases. Phases 2 to 5 are close to vertical already, but phase 1 is a layer (\"skeleton, database, accounts\") and phase 3 is four features, so I took the seams that make a screen demoable: boot and accounts, then the group, then the ledger, then the answer, then finding things.\n\nThe clubbing test, on every adjacent pair, in both directions — what I merged, and what I kept apart despite the overlap:\n\n- **Split types, and the several-payer input (merged into one piece).** High file overlap: the same form, the same action, the same `split()` gaining enum cases and one more input mode. Standalone value of \"by shares\" alone: none — it is the feature plus a second input mode. Combined size: well under the `club_if_under_files: 6` budget. This is the pack's own worked example (a spec's numbered bullets becoming one issue per input mode), so all four split types and one-or-several payers ship together. That makes the expense piece the largest work order in the split, and it says so in its risk.\n- **Accounts, and the first groups (kept apart).** Both touch the schema and the shell, but group creation is a screen a person can be shown and the accounts piece is not. Combined size is far over one work order, and the accounts piece has to land first anyway because it is what makes the other three `sdlc:` verbs real. Kept apart.\n- **The group's own membership, and invite links with placeholders (kept apart).** High overlap on the members screen, the same actions file and the same two tables. Standalone value of the second is real — \"my friend joined\" and \"I added my sister before she had an account\" are two different user stories. But the combined size is two work orders, and the first is already the largest non-money piece. Kept apart, chained.\n- **Creating an expense, and editing or deleting one (kept apart).** Highest overlap in the split — same form components, same action, same three child tables — and the edit half has almost no standalone value before the create half. But together they are the whole expense domain and do not fit one work order, so the split stands and the chain is two. Edit and delete themselves are merged: they are the same routes and the same transactional path, and a \"delete\" that could not follow an \"edit\" would be an odd thing to QA.\n- **The home screen's across-groups totals, and the balances screen (merged).** Same page, same balance computation, small addition, no standalone meaning — that is the pack's club.\n- **The balance-guarded removal rules, and the group piece (deferred to the balances piece).** A member's balance is zero until expenses exist, so the check could be written in the group piece and never exercised. It moves to the piece where TR-16 (\"removing a member leaves other balances unchanged\") can actually be proved, and the group piece's out-of-scope says so.\n- **Balances, and recording a payment (kept apart).** Read the ledger versus write a new record. The read half is the product's answer on its own and is demoable without payments; the write half adds an entity, a form, a delete-permission rule and a restore. Combined they are over one work order. Kept apart.\n- **Balances, and editing expenses (siblings, not chained).** Neither blocks the other, so the balance screen — the screen people came for — does not wait for editing.\n- **Search, filters, and the two activity feeds (merged).** Two small read paths over data that already exists, sharing the list shape and the group sub-screen shell; together one PR, apart two cycles for half a ticket each. The feed waits for payments so it can render all seven event kinds in one go rather than being extended by the payment piece.\n- **The seed, and the README (kept apart).** Zero file overlap, both standalone, and two different verifiers: one is proved by QA running it, the other by a human on a clean machine. Merging them would make one wait on the other for no reason.\n\nTen pieces rather than the usual four to eight. I checked the pairs again and the only one I could still merge without cost is the seed and the README, which I have argued against. If you want eight, merge those two.\n\nTwo things I did not do. Nothing is deferred: the spec's \"not in this version\" list is a decision, not a deferral, and filing nine parked issues for it would be noise — piece 10 states it in the README instead. And there are no other open epics, so there is no `epic_links` to write.\n\nTwo open questions I carried rather than re-asked. `.sdlc/config.yml` has `qa_auth.mode: none`, so QA arrives signed out and can only drive sign-up until a person changes it to `fixture`; piece 9 is what makes that possible and the file is a reserved path. And the brief assumes the last remaining owner cannot leave a group, so the group piece blocks that with a message; if you want the other answer, that is one acceptance line.",
+    "pieces": [
+      {
+        "title": "Stand up the app: database, migrations, health check and real accounts",
+        "why": "A person can sign up, sign in, sign out, edit their profile and reach the signed-in shell of Tabs, against a real Postgres — in-process locally, Neon in production — with a health endpoint whose 200 actually means the app can answer.",
+        "context": "Two surfaces. What a person sees: /sign-up, /sign-in, /settings, the top bar, and the home screen in its empty state, each with the empty, loading and error states docs/ui.md designs, and the theme tokens and the ten primitives in src/components/ui every later screen is built from. What the contract is: this piece defines the user, session and login_attempt tables, the first migration list, src/lib/auth.ts, and GET /api/health — the one route handler that exists before the seed.\n\nIt also makes three of the four pipeline verbs real, which is load-bearing for everything after: package.json typecheck and lint, `sdlc:verify`, `sdlc:serve` (next build && next start on port 3000) and `sdlc:ready`. `.sdlc/memory/project.md` is explicit that the first ticket whose code a verb runs is what makes it real, and that ci-verify fails any branch carrying code while `sdlc:verify` is a stub. `sdlc:seed` stays a stub here; piece 9 makes it real.\n\nThis piece sets the accessibility bar the rest of the split keeps: exactly one h1, a label on every control, a visible focus ring at every tab stop, and designed empty, loading and error states. QA checks these on every screen, so a later piece that skips them is a defect.\n\nNote for the planner: `.sdlc/config.yml` is a reserved path and `qa_auth.mode` is `none`, so QA arrives signed out and drives the sign-up path. Nothing in this ticket changes that; the seed is what later makes `fixture` possible.",
+        "acceptance": [
+          "npm run sdlc:verify and npm run sdlc:serve are real on a clean checkout: dependencies install with scripts disabled, tsc --noEmit and eslint pass, vitest runs, and next build && next start answers on port 3000.",
+          "GET /api/health returns 200 with { status, database, latencyMs } after a real query against the configured database, and 503 naming the failure when the database cannot be reached; neither response ever contains the connection string.",
+          "With DATABASE_URL unset the application runs on in-process PGlite and applies the migration list on boot; setting it uses that Postgres with the same migrations; applying the list to an up-to-date database re-applies nothing, and a lock stops two concurrent cold starts applying one migration twice.",
+          "A person can sign up with an email and password at /sign-up, lands signed in on /, and sees the empty state 'You're not in any groups yet.' with a Create group action. Signed out, / redirects to /sign-in.",
+          "The password is stored only as a salted scrypt hash, and only the SHA-256 of the session token is persisted: the raw cookie value appears nowhere in the database, the cookie is httpOnly, Secure and SameSite=Lax, and a session past its expiry is refused.",
+          "Signing out deletes the session row on the server and clears the cookie; replaying the old cookie afterwards is unauthenticated.",
+          "Six failed sign-ins for one account inside the window are refused and a correct password on the next attempt is accepted, and the status and body for an unknown email are byte-identical to those for a wrong password, including when rate-limited.",
+          "At /settings a person edits their display name and default currency and saves; the new name appears everywhere the user is shown.",
+          "With nothing set the app boots on documented local defaults and logs which it is using; with NODE_ENV=production and a required variable missing, startup stops with a message naming that variable.",
+          "Every screen added here has exactly one h1, correct heading order, a label on every control, a visible focus ring at every tab stop, and designed empty, loading and error states per docs/ui.md.",
+          "Integration tests run against a fresh in-process PGlite with no network: the migrations apply to an empty database, re-applying them is a no-op, the health endpoint answers both 200 and 503, and the session and rate-limit rules above hold."
+        ],
+        "covers": [
+          "TR-10",
+          "TR-11",
+          "TR-12",
+          "TR-20",
+          "TR-21",
+          "TR-22",
+          "TR-24",
+          "S-2",
+          "S-3",
+          "S-8"
+        ],
+        "depends_on": [],
+        "kind": "feature",
+        "risk": "Authentication, the first schema, and the three sdlc:* verbs every later ticket's CI, QA and readiness poll depend on. If the boot, the migrations, the session cookie or the health endpoint are wrong, every later ticket fails before a human sees a product problem, and the failure looks like infrastructure rather than a defect.",
+        "out_of_scope": [
+          "Groups, members and anything about a group's data — piece 2.",
+          "POST /api/dev/seed and scripts/seed.mjs, which stay stubs — piece 9.",
+          "Any money value. No amount is parsed, split or rendered until piece 4."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Create a group, see who is in it, and manage its membership",
+        "why": "A signed-in person can create a group with a name, a currency and a type, land on its overview, see the member list with roles, and as its owner rename it, remove a member or archive it — while someone who is not a member sees nothing at all.",
+        "context": "Two surfaces. What a person sees: the create-group form, /groups/[id] (header with name, type and currency, the balance summary with everyone at zero, the settled message, the recent-activity block reading 'Nothing here yet — add the first expense.', and the secondary action row), /groups/[id]/members, and the group list on the home screen. The home screen's two summary figures — you owe, you are owed — are NOT here; they land with the balances in piece 6. What the contract is: this piece defines the group and member tables, the membership-join authorisation in src/lib/access.ts that every later read copies, and the group and member Server Actions.\n\nThe group row carries the invite token and whether the link is enabled; piece 3 uses them, this piece writes them.\n\nCarry the brief's open question as its assumption: a group always has exactly one owner, so the last remaining member cannot leave and is told to transfer ownership or archive instead.\n\nTwo decisions to make now and not revisit: exactly one owner per group, who is also a member row; and removal sets removed_at on the member rather than deleting the row, so the shares and payer records that point at it stay and no other member's balance moves. Piece 6 depends on that second one.",
+        "acceptance": [
+          "From the home screen a person creates a group with a name, a currency and an optional type (trip, home, couple, other); the currency defaults to the profile's default currency and the creator is its owner and a member from the moment it exists.",
+          "The group overview shows the group's name, type and currency, a balance summary with every member at zero, the settled message in place of a transfer list, and recent activity reading 'Nothing here yet — add the first expense.'",
+          "The members screen lists every member with their name, their balance and their role, marks the owner, and shows the owner-only Rename, Remove member and Archive actions — which are absent for a plain member.",
+          "Renaming changes the group's name everywhere it appears, and archiving removes it from the home list for its members; a member who is not the owner is refused both.",
+          "A member can leave the group from the members screen after confirming in a dialog that names the group, and the home list then says 'You left <group> · Undo' in place rather than a toast.",
+          "The last remaining owner cannot leave, and the screen says they must transfer ownership or archive the group.",
+          "Every read and write of a group's data is authorised by a membership join inside the query that reads it: a second signed-in user opening /groups/[id], its members screen, or any group action gets 404 and no data is returned, and an unauthenticated request is redirected to /sign-in. No code path takes a group id and returns its data.",
+          "The home screen lists only the groups the signed-in person belongs to, each row showing the name, the type and their net balance in it, newest activity first.",
+          "Group created, member joined, member left and member removed each write exactly one activity entry in the same transaction as the change; a write that fails after the group row leaves no entry.",
+          "The members screen and the group overview are operable by keyboard, the destructive confirmations are reachable and dismissible with Escape, and every screen here has its designed empty, loading and error states."
+        ],
+        "covers": [
+          "TR-1",
+          "TR-12",
+          "TR-13",
+          "TR-17",
+          "S-4"
+        ],
+        "depends_on": [
+          1
+        ],
+        "kind": "feature",
+        "risk": "Authorisation. This is where the membership-join pattern in src/lib/access.ts is first written and every later read copies it, and where the member row is designed so removal keeps its history — piece 6's TR-16 is proved by the choice made here.",
+        "out_of_scope": [
+          "Invite links, joining, placeholder members and claiming — piece 3.",
+          "The balance precondition on leaving or removing. A member's balance is zero until expenses exist, so the check could not be exercised here; it and TR-16 land with the balances in piece 6.",
+          "The two summary figures on the home screen — piece 6."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Invite people to a group, and let them claim a name before they sign up",
+        "why": "An owner shares an invite link and any signed-in person who opens it joins the group, while a member who has not signed up yet can be added by name and claim that placeholder when they arrive — with everything recorded against it becoming theirs.",
+        "context": "Two surfaces. What a person sees: the invite block on /groups/[id]/members (the link with Copy link as the primary action, and owner-only controls to turn it off or make a new one), the screen the link opens, the Add placeholder member action, and the Claim action on a placeholder row. What the contract is: invite_token and invite_enabled on the group row, member.user_id nullable so a member can exist before it has an account, and the atomic claim — one transaction that attaches the signed-in user to the placeholder's member row, so a second concurrent claimer is told it is already claimed rather than sharing the history.\n\nThe partial unique index on (group_id, user_id) where user_id is not null is what makes opening a link twice a no-op rather than a second membership.\n\nNothing here records money. A placeholder appears in the pickers piece 4 uses, and piece 5's edit form must still list a member who has since left.",
+        "acceptance": [
+          "The members screen shows the group's invite link with Copy link as the primary action, and only the owner sees the controls to turn the link off or to make a new one.",
+          "Opening the invite link as any signed-in user who is not yet a member joins them to the group and lands them on its overview; opening the same link a second time leaves one membership, not two.",
+          "After the owner makes a new link the previous token is rejected immediately and the new one works; after the link is turned off it is rejected, and a signed-out person opening a link is redirected to /sign-in.",
+          "An owner can add a placeholder member by name; the name appears in the member list and in every member picker, marked as a placeholder with a Claim action.",
+          "Signing in as the person a placeholder names and claiming it makes everything recorded against that placeholder theirs, and a placeholder that is already claimed cannot be claimed again — the screen says it is already claimed.",
+          "Two people claiming the same placeholder at the same moment produce exactly one membership: one succeeds, the other is told it is already claimed.",
+          "Joining, claiming, adding a placeholder and rotating the link each write exactly one activity entry naming the actor, in the same transaction as the change.",
+          "The invite block is skeletoned rather than absent while loading, so the token never flashes as missing, and the copy action confirms in place that the link was copied."
+        ],
+        "covers": [
+          "TR-14",
+          "TR-15",
+          "S-4"
+        ],
+        "depends_on": [
+          2
+        ],
+        "kind": "feature",
+        "risk": "The claim is a race, and it is the one place in the product where two people can end up sharing a placeholder's history if it is not atomic — unrecoverable once it happens. The invite token is also a bearer credential: it lives in a URL and gets pasted into chats, so it must be rotatable and revocable, which is why rotation invalidates the old token immediately rather than leaving both live.",
+        "out_of_scope": [
+          "Recording expenses against a placeholder — piece 4 makes it possible.",
+          "The owner-only controls on the group itself (rename, remove, archive) — piece 2."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Record an expense: who paid, and how it splits",
+        "why": "A member can record an expense in one pass — what it was, how much, the date, an optional category and note, which members paid in parts, and how it splits equally, by exact amount, by percentage or by shares — and see it in the group's expense list, newest first.",
+        "context": "Two surfaces. What a person sees: /groups/[id]/expenses and the new-expense form exactly as docs/ui.md describes it — the participant picker defaulting to every active member, a split-type control offering equally, exact amounts, percentages and shares that changes the inputs without navigating, a live summary line that resolves the split as it is edited, the currency symbol fixed beside the amount, Save full-width on a phone. What the contract is: this piece defines the expense, expense_payer, expense_share and expense_split_input tables and src/lib/money.ts (parseMajorUnits, formatMinorUnits, split).\n\nThe decision recorded on this epic is binding here, with ADR-0008 and ADR-0011: the rule the person entered is stored with the expense — split_type plus one expense_split_input row per included member, holding the number they were given — beside the shares that rule produced. Balances read expense_payer and expense_share alone and never the rule; exactly one function computes a share from a rule, it is called only on the write path, and no read path calls it. Store the rule from the first expense, not from the edit piece: piece 5 reads it back, and adding the table later would mean a migration over stored history.\n\ninput_value's unit is fixed by the expense's split_type — minor units for an exact split, hundredths of a percent for a percentage split, a plain count for shares, and null for an equal split, where membership is the whole input. A member left out of a split has their row deleted, not zeroed.",
+        "acceptance": [
+          "A member records an expense from /groups/[id]/expenses in one pass: description, amount, date, optional category from food, travel, rent, utilities, shopping, entertainment, other, and an optional note; the amount is parsed into integer minor units and no float is ever assigned to, stored in, or returned for a money value.",
+          "All four split types work from the same screen — equally, exact amounts, percentages and shares — and the split-type control changes the inputs shown without navigating away.",
+          "A member can be left out of the split, and the participant picker defaults to every active member on a new expense.",
+          "Exact amounts that do not sum to the total and percentages that do not sum to 100 are rejected with the error beside the field that caused it, naming what is off and by how many minor units — 'That is 240 short of ₹1,000. Check the amounts.' — and no expense is written.",
+          "An equal, percentage or share split whose total does not divide evenly assigns its entire floor-division remainder to the first payer in the split's member order, and the parts always sum to the total; the sum is asserted before the write commits.",
+          "One member or several can pay; with several, each payer's part is entered and stored, the parts must sum to the total, and a set that does not is rejected with the discrepancy named in minor units.",
+          "The expense stores the rule that was entered — its split type and one row per included member with the number given for them — beside the shares that rule produced, and nothing that reads a balance ever reads the rule.",
+          "The live summary line resolves the split as it is edited, so a person sees the shares before saving, and for an invalid one it states exactly what is off and by how much.",
+          "The form is fully operable by keyboard, works at a 360px viewport with no horizontal scrolling, and is recordable in under 60 seconds; a field error moves focus to the first invalid field and keeps every value typed.",
+          "Every amount renders in the group's currency with the correct symbol, separators and fraction digits through Intl.NumberFormat, right-aligned in the tabular figures so a column of money scans.",
+          "The expense list is newest first by date, one row per expense showing description, amount, who paid and the date with a category chip when one is set, and distinguishes 'no expenses yet — add the first one' from 'no expenses match these filters' — the second only once filters exist.",
+          "Recording an expense writes exactly one activity entry in the same transaction, and a write that fails after the expense row leaves no entry.",
+          "Property tests over 10,000 random totals, member counts and split types assert the sum invariant and the stated recipient of the remainder, including a 1-minor-unit total split three ways and a 7-unit total split four ways, and a lint or type rule makes number unassignable to a money value."
+        ],
+        "covers": [
+          "TR-2",
+          "TR-3",
+          "TR-5",
+          "TR-17",
+          "TR-23",
+          "S-5"
+        ],
+        "depends_on": [
+          3
+        ],
+        "kind": "feature",
+        "risk": "The money core. The split algorithm, the remainder rule and the schema that stores both the rule and its result are decided here, and every later balance is a sum over what this piece writes. A mistake is invisible until two people's balances disagree by a paisa and neither can say why — the one failure this product may not have. It is also the largest work order in the split: the four split types and the several-payer input are clubbed into it on purpose, so it should be planned as one piece and reviewed as one unit rather than split again downstream.",
+        "out_of_scope": [
+          "Editing or deleting an expense — piece 5, though the stored rule written here is what makes that possible.",
+          "Search, filters and the activity feed screens — piece 8.",
+          "Balances, debts and payments — pieces 6 and 7."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Edit or delete an expense, and say exactly what changed",
+        "why": "Any member can correct an expense: the edit form reopens showing the split type, the checked participants and every number exactly as they were typed, saving replaces the expense's payers and shares so balances move by exactly the difference, and the activity entry names which of amount, payers, participants and split type changed.",
+        "context": "Two surfaces. What a person sees: /groups/[id]/expenses/[id]/edit, opening populated from the stored rule, and the delete confirmation dialog; after a delete the list confirms in place what was removed. What the contract is: the same three child tables, replaced wholesale in one transaction with the expense and its activity entry.\n\nThis piece carries the second half of the decision recorded on this epic. TR-4 as rewritten and ADR-0011 are binding: editing or deleting an expense replaces that expense's stored payer and share rows in the same transaction that writes its activity entry, so balances move by exactly the difference the replacement makes; no balance changes except through a write to that expense or to a payment; and a change to the split algorithm or to the rounding rule never re-evaluates stored history. An expense keeps the shares it was written with until somebody edits or deletes it.\n\nAn earlier version of TR-4 said the opposite — that an edit never changes a balance — which contradicts editing. If you find that text anywhere, it is stale; docs/trd.md and .sdlc/memory/project.md carry the current rule and this epic's decision is on the record.",
+        "acceptance": [
+          "Opening an expense for edit shows the description, amount, date, category, note, payers, split type, the checked participants and every entered number, in the order they were saved — not a re-normalised version of them.",
+          "A percentage split comes back as the percentages that were typed, a shares split as the shares that were typed, and a split that took a remainder comes back as entered rather than rewritten into an equal share.",
+          "A member who has since left the group is still listed in the edit form, checked, with their name as it was.",
+          "Changing the amount, the payers, the participants or the split type in one save replaces that expense's stored payer and share rows in the same transaction as its activity entry, and every member's balance moves by exactly the difference the replacement makes.",
+          "The activity entry for an edit names each field that moved — amount, payers, participants, split type — with its old and new value, and omits the fields that did not change.",
+          "Saving an untouched edit form writes the same expense again and leaves every balance unchanged.",
+          "Any member can delete an expense after confirming in a dialog that names it; deleting replaces its payer and share rows in the same transaction, restores the balances they moved, and writes exactly one activity entry.",
+          "A change to the split algorithm or to the rounding rule does not re-evaluate stored history: a test changes the rounding rule and asserts every stored balance is byte-identical before and after.",
+          "A field error on the edit form renders beside its field in the negative colour, is associated with its input and announced, and moves focus to the first invalid field without losing what the person typed."
+        ],
+        "covers": [
+          "TR-4",
+          "TR-17",
+          "S-5"
+        ],
+        "depends_on": [
+          4
+        ],
+        "kind": "feature",
+        "risk": "This is the piece that can restate history. An edit that recomputes shares outside the expense's transaction, or that lets a read of the stored split rule feed a balance, would silently change what people already owed. TR-4 as rewritten, ADR-0011 and the decision on this epic are binding, and an older copy of TR-4 says the opposite, so read the current one before planning.",
+        "out_of_scope": [
+          "Restoring a deleted expense — deletion is a soft delete on the row and nothing here surfaces an undo for it.",
+          "The activity feed screens that render these entries — piece 8, which is why this piece's entries are unrendered until then.",
+          "Any change to a stored expense's balance beyond the difference its own replacement makes."
+        ],
+        "issue": null
+      },
+      {
+        "title": "See who owes whom, in as few payments as possible",
+        "why": "The group balance screen shows every member's net balance and the simplified transfers that settle them, says plainly when everyone is square, and the home screen tells a signed-in person what they owe and are owed across every group they are in, totalling exactly the sum of the per-group balances.",
+        "context": "Two surfaces. What a person sees: /groups/[id]/balances (a per-member table of net balances each stated as a direction and a figure, the simplified transfer list 'A pays B ₹X' as the dominant block, the settled message), the balance summary on /groups/[id], and on / the two summary figures at --text-2xl with their per-person breakdowns directly beneath. What the contract is: src/lib/balances.ts — netBalances over the stored expense_payer and expense_share rows, and simplifyDebts by greedy largest-creditor against largest-debtor matching, deterministic, summing to zero, at most n − 1 transfers. The true minimum is a subset-sum partition and is not solvable in polynomial time, so the guarantee stated is the one greedy actually provides, and it is stated rather than implied.\n\nThis piece is read-only. It is also where the balance-guarded membership rules land, because they cannot be exercised before money exists: a member whose balance is non-zero may not leave and may not be removed, and removing a member ends their membership while keeping their stored shares and payer rows, so every other member's balance is unchanged by the removal and the group's history still reads correctly.\n\nA net balance is a sum of stored rows and never a recalculation (TR-4, ADR-0008). simplifyDebts throws on balances that do not sum to zero; that is a programming error, never a user-facing 500, and the sum is asserted before it is called.",
+        "acceptance": [
+          "The balances screen lists every member's net balance as a direction and a figure — 'You are owed ₹420.00', 'You owe ₹180.50', never a bare minus sign — and below it the simplified transfers.",
+          "The transfer list is greedy largest-creditor against largest-debtor matching over the net balances, sums to zero, uses at most n − 1 transfers where n is the members with a non-zero balance, and is deterministic: the same balances always produce the same transfers, checked against a six-member fixture with a known answer.",
+          "A group in which every balance is zero says so plainly on the balances screen and on the group overview — 'Everyone's square in this group.' — instead of an empty transfer list, and a component test asserts that state renders.",
+          "A net balance is a sum over the stored expense_payer and expense_share rows alone; changing the split algorithm or rounding rule does not move it.",
+          "The home screen shows what the signed-in person owes and is owed in total, in the negative and positive colours, with the per-person breakdown directly beneath each figure, across every group they are an active member of.",
+          "The two home totals equal the sum of the per-group net balances to the minor unit across a person in three groups, and a group they have been removed from is excluded from both.",
+          "The home summary is withheld until every group's balance is in — a total of the groups that happened to load is a lie — and one group failing shows its own inline error with Try again beside the rest.",
+          "A member whose balance is non-zero cannot leave the group and cannot be removed, and the screen says the balance has to be settled first; a member at zero can do both.",
+          "Removing a member ends their membership but keeps their stored shares and payer rows: every member's balance is identical immediately before and after, and the removed member's expenses still appear in the list with their name.",
+          "The whole screen fits at 360px with every member and the full transfer list visible without scrolling, and becomes one row per member below 480px with the amount still right-aligned."
+        ],
+        "covers": [
+          "TR-6",
+          "TR-8",
+          "TR-9",
+          "TR-13",
+          "TR-16",
+          "S-6"
+        ],
+        "depends_on": [
+          4
+        ],
+        "kind": "feature",
+        "risk": "Money again, and this is the piece that reads the ledger. netBalances must sum stored rows and never re-evaluate a split rule, and it must not read expense_split_input, which is the trap ADR-0011 names: one function computes a share from a rule, on the write path only.",
+        "out_of_scope": [
+          "Recording a payment — piece 7. This piece only reads the ledger.",
+          "Search, filters and the feed screens — piece 8."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Settle up by recording a payment",
+        "why": "From the group balance screen a member can record a payment to another member in full or in part; both balances move by its amount at once, it appears in the activity feed, and either of the two members involved can delete it, which restores exactly what it moved.",
+        "context": "Two surfaces. What a person sees: the Record payment action on /groups/[id]/balances opening a small from, to, amount and optional note form, the delete confirmation, and the updated balances and transfer list without a page reload. What the contract is: the payment table and its Server Action. Every write is one transaction that writes the payment and its activity entry together; a delete removes the row and restores the balances in that same transaction.\n\nBoth members must be members of the group, and the balances it moves come from the same net-balance computation piece 6 built.",
+        "acceptance": [
+          "A member records a payment from the balances screen choosing from and to, an amount and an optional note, in full or in part, and both members' balances move by exactly that amount without a page reload.",
+          "A recorded payment appears in the group's activity naming who recorded it, when, and between whom and for how much.",
+          "A partial payment leaves the remainder owed: the per-member table shows it and the transfer list is recomputed from the new balances.",
+          "Either of the two members the payment involves can delete it after confirming in a dialog that names it, and both balances return to exactly what they were; a third member is refused the delete.",
+          "A payment is written in one transaction with its activity entry — a write that fails after the payment row leaves no entry, and one successful write leaves exactly one.",
+          "Both members must be members of the group and the amount must be positive; an invalid choice is refused with the reason beside the field, and the form keeps every value typed.",
+          "The submit button is the only busy state in the product: it disables and reads 'Recording…' while the write is in flight."
+        ],
+        "covers": [
+          "TR-7",
+          "TR-17",
+          "S-6"
+        ],
+        "depends_on": [
+          6
+        ],
+        "kind": "feature",
+        "risk": "A payment is the one record that moves money with no expense behind it, and deleting it has to restore what it moved exactly. Getting the restore wrong leaves a group that looks settled and is not — and nothing else in the product would show it.",
+        "out_of_scope": [
+          "The feed screens that render this entry — piece 8; this piece writes the entry and the event kind, and the feed renders it when it lands.",
+          "Paying through the app. Tabs records a payment, it does not move money; UPI, cards and webhooks are not in this version."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Find an expense from three months ago, and read what has happened",
+        "why": "A person can search expenses by description, filter them by member and by category with the active filters shown as removable chips, and read a per-group and a cross-group activity feed that says what happened, to whom and by whom, newest first.",
+        "context": "Two surfaces. What a person sees: the search and filter row above the expense list (one row on a phone, wrapping below 480px, never inside the list, each active filter a removable chip), /groups/[id]/activity and the cross-group /activity. What the contract is: the expense list query gains a search term and two filters that compose, against the index on description and on (group_id, date desc); the feed reads the activity table that every mutation has written transactionally since piece 2, and renders the seven kinds — expense added, edited and deleted, payment recorded, member joined, left and removed — each with its actor and its time.\n\nThis piece renders entries other pieces write and writes none of its own, which is why it sits after payments: the feed covers all seven kinds in one go rather than being extended afterwards by the payment piece.",
+        "acceptance": [
+          "The expense list can be searched by description and filtered by member and by category; the active filters appear as removable chips above the list and compose with the search term.",
+          "An empty result says what was searched or filtered and offers Clear filters, and is never the same screen as 'no expenses yet' with its Add expense action.",
+          "The group feed lists expense added, edited and deleted, payment recorded, and member joined, left and removed, each with what happened, to whom, by whom and when, newest first, grouped by day with a date heading.",
+          "An edit's entry names each field that moved — amount, payers, participants, split type — with its old and new value, rather than only saying an expense changed.",
+          "The cross-group feed lists the same events across every group the person is an active member of, names the group on every entry, and shows nothing from a group they were removed from.",
+          "Both feeds state their empty case in words — 'Nothing has happened in this group yet.' and 'No activity across your groups yet.' — and offer no action, because the thing that creates activity is an expense.",
+          "Every entry carries a relative time in --text-sm and an absolute time in the title attribute, and long descriptions truncate to one line so a row is never three lines tall for that reason.",
+          "A signed-in person who is not a member of a group gets 404 from that group's feed, and an unauthenticated request is redirected to sign-in.",
+          "The filters survive a failed load, so Try again does not lose them."
+        ],
+        "covers": [
+          "TR-18",
+          "TR-19",
+          "S-7"
+        ],
+        "depends_on": [
+          7
+        ],
+        "kind": "feature",
+        "risk": "Low. The entries exist and are already written in the same transaction as their change; this is a read path and two screens. The risk is scope — search, two filters and two feeds in one work order — which is why nothing else is in it.",
+        "out_of_scope": [
+          "Writing activity entries: every mutation has written its own since piece 2, and this piece only reads them.",
+          "Charts, spending reports and email notifications — not in this version."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Seed Tabs with a fixed set of users, groups and expenses",
+        "why": "QA and a new contributor get a populated app from one command: fixed users with known passwords, groups containing one expense of every split type, a multi-payer expense, payments and an unclaimed placeholder member — and running it twice gives exactly the same state.",
+        "context": "No UI. What a person sees: nothing in the browser; the credentials are printed by the script. What the contract is: POST /api/dev/seed plus scripts/seed.mjs — fixtures reach the database through the running application, not around it (ADR-0007) — and this piece makes `sdlc:seed` real, the last of the four pipeline verbs.\n\nThe endpoint rebuilds by truncating and recreating rather than appending, so seeding twice is the same state and a failed QA run is recovered by re-seeding. It refuses with 409 when the request does not come from localhost and 403 naming NODE_ENV when NODE_ENV is production. The script waits for /api/health before posting and exits non-zero with the endpoint's message on failure, so a failed seed is visible in the QA boot log rather than a silent empty database.\n\n`.sdlc/config.yml` is a reserved path, so nothing here changes `qa_auth.mode`; a person changes it from `none` to `fixture` themselves, and this piece is what makes that possible.",
+        "acceptance": [
+          "npm run sdlc:seed creates, through the running application, a fixed set of users with known passwords, groups containing one expense of every split type, a multi-payer expense, payments, and an unclaimed placeholder member, and prints the credentials on success.",
+          "Running it twice produces the same state — the endpoint truncates and rebuilds rather than appending — and a test seeds twice and compares the resulting rows.",
+          "The endpoint refuses with 403 naming NODE_ENV when NODE_ENV is production, and with 409 when the request does not come from localhost; the guard is a security requirement, not a convenience, because this endpoint writes.",
+          "Against the seeded group the balances screen shows a correct per-member table, transfers and settled case, and the activity feed shows entries of every kind — so QA can drive the money screens without creating data by hand.",
+          "Sign-in with a seeded user's known password works in a browser at http://localhost:3000 against the production build, and the seeded placeholder can be claimed by signing in as that name.",
+          "The script exits non-zero with the endpoint's message when seeding or the health wait fails."
+        ],
+        "covers": [
+          "TR-26",
+          "S-9"
+        ],
+        "depends_on": [
+          7
+        ],
+        "kind": "chore",
+        "risk": "It truncates. The localhost and production guards are the only things between this and a wiped database, and they have to be right rather than merely present.",
+        "out_of_scope": [
+          "Any fixture the pieces above do not build yet.",
+          "Changing qa_auth.mode in .sdlc/config.yml, which is a reserved path and a person's decision."
+        ],
+        "issue": null
+      },
+      {
+        "title": "Run Tabs and deploy it to Vercel from the README alone",
+        "why": "A new contributor can clone the repository and run it with one command and nothing installed, and follow the deploy guide from an empty Vercel project to a live Tabs on its own Neon database, knowing which variables to set and how migrations run.",
+        "context": "No UI. What a person sees: README.md, and whatever a person sees when they follow it. What the contract is: the environment variables the code actually reads, each documented with its purpose and whether it is required — `.env*` is a forbidden path, so the documentation lives in the README itself — and the production build measured rather than asserted.\n\nIt is also where the speed requirement is proved: the home, group, expenses and balances screens under one second at p75 on an ordinary connection, measured against the production build booted on the runner. Measuring against `next dev` measures the development compiler, which is the measurement that always flatters.\n\nStated plainly because the README must not pretend otherwise: no Vercel project and no Neon database exist for this repository yet, and a person has to connect them. QA boots the production build against a local database, so what QA proves is the build, not the Neon path.",
+        "acceptance": [
+          "The README documents every environment variable the code actually reads, with its purpose and whether it is required, and a reviewer checks the list against the code rather than against the brief.",
+          "On a clean machine with nothing installed, one command runs the application locally — no account, no database to provision, no install script — and it answers on port 3000 with /api/health green.",
+          "The deploy guide says which database to add from Vercel's Storage tab, which variables to set, and that migrations run on boot behind a lock rather than as a build step, and a person follows it from an empty project to a deployed Tabs.",
+          "The main screens — home, group, expenses, balances — respond in under one second at p75 on an ordinary connection, measured against the production build, and the timing is recorded in the QA report.",
+          "The README states what a person still has to do by hand — connecting the Vercel project, provisioning Neon — and that previews must point at a Neon branch, never at production, because sdlc:seed writes into whatever DATABASE_URL names.",
+          "The README says what this version deliberately does not do — password reset, account deletion, paying through the app, receipt photos, recurring expenses, more than one currency per group, charts, native apps, email — so nobody reads their absence as unfinished work."
+        ],
+        "covers": [
+          "TR-22",
+          "TR-25",
+          "TR-27",
+          "S-9",
+          "S-10"
+        ],
+        "depends_on": [
+          7
+        ],
+        "kind": "chore",
+        "risk": "It is verified by a human on a clean machine, not by a test, so it can pass CI and still be wrong. And the Neon path is the one thing no automated check here covers: QA runs the production build against a local PGlite, so the production database is proved by a person opening the preview.",
+        "out_of_scope": [
+          "Creating the Vercel project and provisioning the Neon database, which a person must do.",
+          "env.mode: preview rather than compose in .sdlc/config.yml — a reserved path, and an open question in the brief.",
+          "Dark mode, which the brief forbids a single ticket from adding."
+        ],
+        "issue": null
+      }
+    ],
+    "deferred": []
+  },
+  "children": []
 }
