@@ -394,5 +394,310 @@
       "Record-payment affordance before piece 7 (ships disabled)."
     ],
     "version": 2
-  }
+  },
+  "approved_work_order": {
+    "acceptance": [
+      {
+        "check": "Visible direction words + greedy transfers on /groups/[id]/balances (IAC-1)",
+        "how_to_verify": "QA + balances-screen component test",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "Greedy largest-creditor/debtor, exact, <=n-1, deterministic six-member fixture (IAC-2)",
+        "how_to_verify": "tests/lib/balances.test.ts",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "check": "Settled sentence on balances + overview via ui.md extraction (IAC-3)",
+        "how_to_verify": "Component tests + QA on fresh/settled group",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "Balances sum payer/share rows only; rule/rounding changes move nothing (IAC-4)",
+        "how_to_verify": "tests/integration/balances.test.ts",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "Home two --text-2xl totals with per-person breakdowns beneath (IAC-5)",
+        "how_to_verify": "QA on / with debtor+creditor groups",
+        "id": "AC-5",
+        "source": "IAC-5",
+        "verify": "browser"
+      },
+      {
+        "check": "Three-group totals equal per-group sums, breakdowns sum to totals, removed group excluded (IAC-6)",
+        "how_to_verify": "tests/integration/balances.test.ts",
+        "id": "AC-6",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "Home withholds totals on partial failure, inline error + Try again (IAC-7)",
+        "how_to_verify": "QA with forced group failure",
+        "id": "AC-7",
+        "source": "IAC-7",
+        "verify": "browser"
+      },
+      {
+        "check": "Non-zero leave/remove refused with settle-first sentence; zero succeeds (IAC-8)",
+        "how_to_verify": "QA on members screen",
+        "id": "AC-8",
+        "source": "IAC-8",
+        "verify": "browser"
+      },
+      {
+        "check": "Removal keeps rows, balances identical, expenses still named (IAC-9)",
+        "how_to_verify": "tests/integration/balances.test.ts",
+        "id": "AC-9",
+        "source": "IAC-9",
+        "verify": "test"
+      },
+      {
+        "check": "360px seeded group: one row/member, right-aligned mono, no h-scroll (IAC-10)",
+        "how_to_verify": "QA at 360x740 and 1280px",
+        "id": "AC-10",
+        "source": "IAC-10",
+        "verify": "browser"
+      },
+      {
+        "check": "Server guard refuses leave/remove in-transaction with no write (TR-13)",
+        "how_to_verify": "Integration guard cases via withRequest",
+        "id": "AC-11",
+        "source": "TR-13",
+        "verify": "test"
+      },
+      {
+        "check": "simplifyDebts throws on non-zero sum; pages assert first (TR-6)",
+        "how_to_verify": "Unit throw case + code review",
+        "id": "AC-12",
+        "source": "TR-6",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Recompute shares from expense_split_input on read",
+        "rejected_because": "Violates TR-4/ADR-0011; algorithm changes would restate history."
+      },
+      {
+        "approach": "SQL/CTE simplification instead of pure function",
+        "rejected_because": "Ordering, tie-break and count bound belong in testable TypeScript; sums stay in SQL."
+      },
+      {
+        "approach": "Precomputed balance column per membership",
+        "rejected_because": "Second source of truth; TR-4 defines balance as sum of stored rows."
+      }
+    ],
+    "approach": "Pure src/lib/balances.ts plus authorised sums in access.ts that never read expense_split_input; visible direction words via money.tsx fix; per-person home breakdowns from caller-involved simplified transfers with totals withheld on partial failure; in-transaction leave/remove guard with shared settle-first sentence; no migration and no doc edits.",
+    "assumptions": [
+      "Single-currency (EUR) fixtures; mixed-currency totals are a flagged risk.",
+      "Record-payment ships disabled with helper text since TR-7 belongs to piece 7.",
+      "No seed endpoint yet, so QA drives flows manually."
+    ],
+    "confidence": 80,
+    "confidence_rationale": "Read path is new code over the merged expense ledger with the schema match verified directly (payer/share/split_input present, no payment table), every 0n literal and sr-only direction confirmed at its call site, and both GroupOverview test suites identified as prop-change casualties; per-person home aggregation from caller-involved transfers is the one piece with no existing pattern to copy, and QA fixtures depend on manual flows, which is what keeps this at 80 rather than 90.",
+    "debate_summary": "The critique was an empty object with no findings, so there was nothing to accept, rebut, or split — I judged the proposal directly against the code and plan/brief.md instead. I verified each load-bearing claim myself and all checked out. The proposal (v2) already incorporates what a critic would have cited against v1: Money renders direction sr-only so IAC-1 needs the money.tsx fix plus the ui.test.tsx update, the GroupOverview prop change breaks group-overview-empty.test.tsx as well as group-screens.test.tsx, and docs/ui.md line 106 settles the home breakdown as per-person rather than per-group. I confirmed v2 was right to drop v1's member-actions.tsx edit — both LeaveButton and RemoveButton already render the server formError via role=alert, so no change is needed there. No finding contradicted the binding decisions (stored split rule, TR-4 rewrite). One thing both proposal versions missed, noted in residual_risks rather than added to scope: the group overview's activity-partial state has no IAC in this ticket.",
+    "evidence": [
+      "readMembers/listGroupsForUser return 0n literals (access.ts)",
+      "Money renders direction sr-only; all three callers pass direction='settled'",
+      "expense_payer/share/split_input exist in schema; no payment table; only /api/health exists",
+      "group-overview-empty.test.tsx documents two prior rejections for retyped UI strings",
+      "member-actions.tsx LeaveButton/RemoveButton already render state.formError via role=alert",
+      "docs/ui.md line 106: home summary carries per-person breakdowns; line 84: direction is a word beside the number"
+    ],
+    "files": [
+      {
+        "action": "create",
+        "change": "Pure bigint netBalances + greedy simplifyDebts with tie-break, throw, n-1 bound",
+        "path": "src/lib/balances.ts",
+        "why": "TR-6 home"
+      },
+      {
+        "action": "edit",
+        "change": "Add readBalancesForGroup/readNetBalanceForMember; real balances in readMembers/listGroupsForUser; never read split_input",
+        "path": "src/lib/access.ts",
+        "why": "Single authorised sum point per TR-4"
+      },
+      {
+        "action": "edit",
+        "change": "In-transaction non-zero guard with 'settled first' formError",
+        "path": "src/app/actions/members.ts",
+        "why": "Server enforcement TR-13/IAC-8"
+      },
+      {
+        "action": "create",
+        "change": "Server component: auth, parse, read, assert sum, simplify, render screen",
+        "path": "src/app/(app)/groups/[id]/balances/page.tsx",
+        "why": "IAC-1/2/3 screen"
+      },
+      {
+        "action": "create",
+        "change": "Presentational rows, dominant transfers, settled sentence, disabled payment note",
+        "path": "src/components/balances-screen.tsx",
+        "why": "Testable presentation"
+      },
+      {
+        "action": "edit",
+        "change": "Render direction words visibly beside figure",
+        "path": "src/components/ui/money.tsx",
+        "why": "sr-only fails visible-direction IAC-1"
+      },
+      {
+        "action": "edit",
+        "change": "Balances+transfers props, derived directions, Balances nav",
+        "path": "src/components/group-overview.tsx",
+        "why": "Overview must match balances"
+      },
+      {
+        "action": "edit",
+        "change": "Fetch balances, assert, simplify, pass to overview",
+        "path": "src/app/(app)/groups/[id]/page.tsx",
+        "why": "Replace 0n literals"
+      },
+      {
+        "action": "edit",
+        "change": "allSettled per-group nets+transfers; withhold totals on failure",
+        "path": "src/app/(app)/page.tsx",
+        "why": "IAC-7"
+      },
+      {
+        "action": "create",
+        "change": "Two --text-2xl totals with per-person counterparty lines beneath",
+        "path": "src/components/home-summary.tsx",
+        "why": "IAC-5/6"
+      },
+      {
+        "action": "edit",
+        "change": "HomeSummary on top; inline error rows; real per-group nets",
+        "path": "src/components/group-list.tsx",
+        "why": "Replace 0n home rows"
+      },
+      {
+        "action": "edit",
+        "change": "Real balances, hide Leave/Remove at non-zero with settle-first sentence",
+        "path": "src/components/members-screen.tsx",
+        "why": "IAC-8 visible guard"
+      },
+      {
+        "action": "create",
+        "change": "Six-member fixture, bounds, determinism, throw",
+        "path": "tests/lib/balances.test.ts",
+        "why": "TR-6 proof"
+      },
+      {
+        "action": "create",
+        "change": "Rule-immutability, 3-group totals, guards, removal preservation",
+        "path": "tests/integration/balances.test.ts",
+        "why": "IAC-4/6/8/9 proof"
+      },
+      {
+        "action": "create",
+        "change": "ui.md-extracted settled copy, visible directions, transfers",
+        "path": "tests/components/balances-screen.test.tsx",
+        "why": "IAC-1/3 proof"
+      },
+      {
+        "action": "edit",
+        "change": "Real-balance fixtures; visible-word assertions",
+        "path": "tests/components/group-screens.test.tsx",
+        "why": "Pins pre-balance literals"
+      },
+      {
+        "action": "edit",
+        "change": "Pass new balances+transfers props to empty-state renders",
+        "path": "tests/components/group-overview-empty.test.tsx",
+        "why": "Second suite pinning GroupOverview props"
+      },
+      {
+        "action": "edit",
+        "change": "sr-only to visible-word Money assertions",
+        "path": "tests/components/ui.test.tsx",
+        "why": "Money now visible"
+      }
+    ],
+    "issue": 8,
+    "kind": "feature",
+    "mode": "proposal",
+    "out_of_scope": [
+      "Recording or deleting a payment (TR-7, piece 7): this piece only reads the ledger; the balances screen's Record-payment control ships disabled.",
+      "Search, filters and feed screens (piece 8).",
+      "Expense edit/delete writes: owned by the expenses piece; this ticket upholds the read side (never sum expense_split_input) and the removal side (TR-16) only.",
+      "Doc edits (docs/trd.md TR-4, docs/ui.md expense form, ADRs): already reflect the binding decisions; the reserved-path guard forbids touching them here.",
+      "Dark mode, theme tokens, and performance measurement (TR-25, covered by QA timing)."
+    ],
+    "qa_script": [
+      "3-member multi-payer group: balances rows show visible direction words; transfer list dominant.",
+      "Settle to zero: balances + overview show settled sentence.",
+      "Non-zero leave/remove refused with settle-first sentence; succeed after settling.",
+      "Home two totals + per-person lines; removed group excluded.",
+      "360px + 1280px balances layout check."
+    ],
+    "residual_risks": [
+      "Mixed-currency users: home totals sum minor units across groups that may not share a currency; fixtures and QA use one currency and no conversion exists by design.",
+      "Balances sum expenses only until piece 7 adds payments; readBalancesForGroup in access.ts is the single extension point, and every balance here silently understates once payments exist.",
+      "IAC-10 no-scroll holds for the seeded small group; large groups will scroll vertically at 360px no matter the layout.",
+      "Home per-group Try again revalidates the whole page rather than refetching one row; a Suspense-per-row shape is the follow-up if QA finds that jarring.",
+      "Group overview activity-partial state (ui.md: balances still render, only activity shows inline error) has no IAC in this ticket and neither proposal nor critique wired it; QA should check what an activity failure does to the overview."
+    ],
+    "risks": [
+      "Zero doc edits per reserved-path guard though TR-4/ui.md already landed.",
+      "Balances sum expenses only until piece 7 adds payments.",
+      "Mixed-currency home totals need a product decision.",
+      "IAC-10 no-scroll holds for seeded small group; large groups scroll vertically."
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "six-member known answer",
+          "exact reproduction, n-1 bound",
+          "determinism",
+          "non-zero-sum throws"
+        ],
+        "path": "tests/lib/balances.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "split_input rewrite moves nothing",
+          "3-group totals + breakdown sums; removal excluded",
+          "guards refuse without write",
+          "removal preserves rows/balances"
+        ],
+        "path": "tests/integration/balances.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "ui.md-extracted settled copy",
+          "visible direction words",
+          "transfer list"
+        ],
+        "path": "tests/components/balances-screen.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "real balances render",
+          "visible directions"
+        ],
+        "path": "tests/components/group-screens.test.tsx"
+      }
+    ],
+    "understanding": "Issue #8 builds read-only balances: per-member nets + greedy transfers on /groups/[id]/balances, real figures on overview/home with per-person breakdowns, and balance-guarded leave/remove preserving history. Binding: split rule stored (split_type + inputs) while balances read only payer/share rows; TR-4 rewritten so edits replace rows in one transaction. Rejection body is empty; v2 fixes documented string-retyping rejections plus v1 gaps (sr-only Money, per-group vs per-person, second overview test).",
+    "unknowns": [
+      "Seed fixtures for QA (no seed endpoint yet).",
+      "Record-payment affordance before piece 7 (ships disabled)."
+    ],
+    "version": 2
+  },
+  "approved_too_high": false
 }
