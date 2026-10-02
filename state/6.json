@@ -493,7 +493,8 @@
         "detail": "An amount above the int8 column range parses cleanly and then fails the insert with an uncaught overflow (500) instead of a typed field error beside the amount.\n\n`src/app/actions/expenses.ts:171`\n\nEvidence: parseMajorUnits accepts arbitrary-length input — the unit test itself proves '123456789012345678901234567890.12' parses to minor ≈1.23e31 — while expenses/expense_payer/expense_share amount_minor are bigint (int8, max 9223372036854775807). The action bounds the amount only below (line 173, <= 0n) and has no try/catch around the transaction, so submitting that amount throws Postgres 'out of range for type bigint' and surfaces as a 500; the transaction rolls back, so nothing is stored, but the user gets no beside-the-field refusal. Same bound is missing for payer parts and exact-split inputs, which land in the same int8 columns.\n\nFix: Refuse amount.minor (and each payer part / exact input) above 9223372036854775807n with a field error beside the amount before the write, e.g. alongside the <= 0n check."
       }
     ],
-    "pr": "25"
+    "pr": "25",
+    "filed": 27
   },
   "qa": {
     "verdict": "pass",
