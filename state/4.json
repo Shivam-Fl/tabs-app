@@ -800,7 +800,8 @@
         "detail": "src/components/archive-button.tsx (+58) is in the PR diff but in none of work-order.json files[]' 34 entries, the only such file.\n\n`src/components/archive-button.tsx:1`\n\nEvidence: Programmatic set-diff of `gh pr diff 19 --name-only` against work-order files[]: PR-only = {src/components/archive-button.tsx}, work-order-only = {}. The archive control's behavior is planned (members-screen.tsx files[] entry describes the owner-only rename+archive section, and members-screen.tsx imports and renders ArchiveButton), so no unreviewed behavior ships; but the file itself was never in the reviewed plan.\n\nFix: List the file in files[] with its owner-only archive-control change, or fold the component into members-screen.tsx."
       }
     ],
-    "pr": "19"
+    "pr": "19",
+    "filed": 20
   },
   "qa": {
     "verdict": "pass",
