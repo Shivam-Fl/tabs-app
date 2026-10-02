@@ -1,7 +1,7 @@
 {
   "issue": 4,
   "pr": null,
-  "state": "needs-human",
+  "state": "planning",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -42,7 +42,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:13.235Z",
-  "updated_at": "2026-10-02T10:44:56.465Z",
+  "updated_at": "2026-10-02T11:05:31.291Z",
   "history": [
     {
       "at": "2026-10-02T09:44:06.470Z",
@@ -78,6 +78,11 @@
       "at": "2026-10-02T10:44:56.465Z",
       "agent": "self-heal",
       "action": "-> needs-human"
+    },
+    {
+      "at": "2026-10-02T11:05:31.291Z",
+      "agent": "watchdog",
+      "action": "-> planning"
     }
   ],
   "epic": 1,
