@@ -809,8 +809,8 @@
     ]
   },
   "qa": {
-    "verdict": "fail",
-    "introduced_bugs": 1,
+    "verdict": "pass",
+    "introduced_bugs": 0,
     "ac_ids": [
       "AC-1",
       "AC-2",
@@ -825,19 +825,15 @@
       "AC-11",
       "AC-12",
       "AC-13",
-      "AC-14"
+      "AC-14",
+      "AC-15"
     ],
-    "sha": "71e2e89a3acab533da9508aa8089f096bc0f8b27",
-    "run_id": "36972755420",
-    "work_order_version": 3,
-    "at": "2026-10-02T06:57:24.742Z"
+    "sha": "dc5a214b7c8c2ff36c19f28428de9b431dfed40a",
+    "run_id": "36987708141",
+    "work_order_version": 4,
+    "at": "2026-10-02T09:43:31.743Z"
   },
-  "qa_open_bugs": [
-    {
-      "id": "BUG-4",
-      "title": "The top bar ellipsises ordinary display names on a wide screen, where the header is almost entirely empty"
-    }
-  ],
+  "qa_open_bugs": [],
   "failure_packet": {
     "issue": 3,
     "pr": 13,
