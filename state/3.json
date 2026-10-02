@@ -261,9 +261,9 @@
     "version": 3
   },
   "touch_paths": [
+    "src/app/layout.tsx",
     "src/app/globals.css",
     "src/components/ui/top-bar.tsx",
-    "src/components/auth-form.tsx",
     "tests/components/ui.test.tsx",
     "tests/components/ui.test.tsx"
   ],
