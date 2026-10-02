@@ -1,7 +1,7 @@
 {
   "issue": 8,
   "pr": 31,
-  "state": "implementing",
+  "state": "needs-human",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -368,7 +368,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:28.348Z",
-  "updated_at": "2026-10-02T21:38:17.244Z",
+  "updated_at": "2026-10-02T21:38:18.965Z",
   "history": [
     {
       "at": "2026-10-02T20:20:32.044Z",
@@ -434,6 +434,11 @@
       "at": "2026-10-02T21:38:17.244Z",
       "agent": "implementer",
       "action": "lock released"
+    },
+    {
+      "at": "2026-10-02T21:38:18.965Z",
+      "agent": "gate",
+      "action": "-> needs-human"
     }
   ],
   "epic": 1,
