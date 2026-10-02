@@ -573,10 +573,11 @@ jobs:
           allowed_bots: "github-actions"
           claude_args: ${{ steps.rt.outputs.args }} --continue
           prompt: |
-            Your session ended before it returned its result, so none of the work above can be
-            used yet. Return it now, as the structured result this session is held to — from
-            what you have already found and written. Do not start the task over. If an earlier
-            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+            Your session ended without returning its result, so none of the work above can be
+            used yet. Return it now: call the structured output tool (StructuredOutput) with the
+            result, built from what you have already found and written. Do not start the task
+            over. If an earlier turn wrote the file, read it back and return what it holds,
+            corrected if it is wrong. Calling that tool is the last thing you do.
       # The session's result, validated by the SDK against its schema, written as the file the
       # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
       # wrote there itself. Shell and jq only: an agent ran in this job.

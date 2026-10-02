@@ -347,10 +347,11 @@ jobs:
           allowed_bots: "github-actions"
           claude_args: ${{ steps.rt.outputs.args }} --continue
           prompt: |
-            Your session ended before it returned its result, so none of the work above can be
-            used yet. Return it now, as the structured result this session is held to — from
-            what you have already found and written. Do not start the task over. If an earlier
-            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+            Your session ended without returning its result, so none of the work above can be
+            used yet. Return it now: call the structured output tool (StructuredOutput) with the
+            result, built from what you have already found and written. Do not start the task
+            over. If an earlier turn wrote the file, read it back and return what it holds,
+            corrected if it is wrong. Calling that tool is the last thing you do.
       - name: The framework is untouched — Diagnose — after Finish
         if: ${{ !cancelled() && steps.diagnose_agent.outcome != 'skipped' && steps.diagnose_agent.outputs.structured_output == '' }}
         id: fw_diagnose_finish

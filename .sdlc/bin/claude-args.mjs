@@ -301,12 +301,18 @@ if (isMain && process.argv[2] === '--probe') {
     schemaArg = `--json-schema '${json}'`;
     setOutput('files', JSON.stringify(files));
   }
+  // A model behind the translator can end its turn without the result, and the SDK cannot stop it:
+  // Muse Spark ran 40 turns and ended "successfully" with nothing returned. Said in the system prompt
+  // as well as by the schema, so the first attempt rarely needs the resume after it.
+  const resultNote = spec ? 'Your result is returned by calling the structured output tool (StructuredOutput), ' +
+    'once, as the last thing you do — writing a file is not returning it. A session that ends without that call has ' +
+    'produced nothing, whatever it did.' : '';
 
   const args = [
     turns ? `--max-turns ${turns}` : '',
     `--allowedTools ${TOOLS[role]}`,
     model ? `--model ${model}` : '',
-    `--append-system-prompt ${trustArg(GATED_ROLES.includes(role) ? preflightNote(process.env.ISSUE) : '')}`,
+    `--append-system-prompt ${trustArg([GATED_ROLES.includes(role) ? preflightNote(process.env.ISSUE) : '', resultNote].filter(Boolean).join(' '))}`,
     schemaArg,
   ].filter(Boolean).join(' ');
 

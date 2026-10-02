@@ -362,10 +362,11 @@ jobs:
           allowed_bots: "github-actions"
           claude_args: ${{ steps.rt.outputs.args }} --continue
           prompt: |
-            Your session ended before it returned its result, so none of the work above can be
-            used yet. Return it now, as the structured result this session is held to — from
-            what you have already found and written. Do not start the task over. If an earlier
-            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+            Your session ended without returning its result, so none of the work above can be
+            used yet. Return it now: call the structured output tool (StructuredOutput) with the
+            result, built from what you have already found and written. Do not start the task
+            over. If an earlier turn wrote the file, read it back and return what it holds,
+            corrected if it is wrong. Calling that tool is the last thing you do.
       - name: The agent left the framework alone — after Finish
         if: ${{ !cancelled() && (needs.prepare.outputs.mode != 'council') && steps.review_single.outcome != 'skipped' && steps.review_single.outputs.structured_output == '' }}
         run: >-
@@ -465,10 +466,11 @@ jobs:
           allowed_bots: "github-actions"
           claude_args: ${{ steps.rt_corr.outputs.args }} --continue
           prompt: |
-            Your session ended before it returned its result, so none of the work above can be
-            used yet. Return it now, as the structured result this session is held to — from
-            what you have already found and written. Do not start the task over. If an earlier
-            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+            Your session ended without returning its result, so none of the work above can be
+            used yet. Return it now: call the structured output tool (StructuredOutput) with the
+            result, built from what you have already found and written. Do not start the task
+            over. If an earlier turn wrote the file, read it back and return what it holds,
+            corrected if it is wrong. Calling that tool is the last thing you do.
       - name: The agent left the framework alone — after Finish
         if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_a.outcome != 'skipped' && steps.review_a.outputs.structured_output == '' }}
         run: >-
@@ -573,10 +575,11 @@ jobs:
           allowed_bots: "github-actions"
           claude_args: ${{ steps.rt_des.outputs.args }} --continue
           prompt: |
-            Your session ended before it returned its result, so none of the work above can be
-            used yet. Return it now, as the structured result this session is held to — from
-            what you have already found and written. Do not start the task over. If an earlier
-            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+            Your session ended without returning its result, so none of the work above can be
+            used yet. Return it now: call the structured output tool (StructuredOutput) with the
+            result, built from what you have already found and written. Do not start the task
+            over. If an earlier turn wrote the file, read it back and return what it holds,
+            corrected if it is wrong. Calling that tool is the last thing you do.
       - name: The agent left the framework alone — after Finish
         if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_b.outcome != 'skipped' && steps.review_b.outputs.structured_output == '' }}
         run: >-
