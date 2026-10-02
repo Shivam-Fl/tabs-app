@@ -18,7 +18,317 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
+  "work_order": {
+    "acceptance": [
+      {
+        "check": "A signed-in member records an expense from /groups/[id]/expenses in one pass — description, amount, date, optional category (food, travel, rent, utilities, shopping, entertainment, other) and optional note — and the amount reaches the database as integer minor units with no float anywhere on the path.",
+        "how_to_verify": "QA signs up, creates a group, records an expense and sees it listed; integration test asserts stored amount_minor.",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "All four split types (equally, exact amounts, percentages, shares) work from the same screen and switching the split-type control swaps the inputs shown without navigating.",
+        "how_to_verify": "QA records one expense of each split type from the same screen.",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "The participant picker defaults to every active member on a new expense.",
+        "how_to_verify": "QA opens the new-expense form and sees every active member checked.",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "browser"
+      },
+      {
+        "check": "An unchecked member gets no expense_share row and no expense_split_input row; unchecking everyone is rejected with a field error beside the picker and nothing is written.",
+        "how_to_verify": "Integration test unchecks one member then all members and asserts row absence plus the picker error.",
+        "id": "AC-4",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "Exact amounts that do not sum to the total and percentages that do not sum to 100 are rejected beside the field that caused them, naming the minor-unit shortfall, and no expense row is written.",
+        "how_to_verify": "Integration test asserts the typed field error and unchanged tables.",
+        "id": "AC-5",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "An equal, percentage or share split whose total does not divide evenly assigns its entire floor-division remainder to the first payer in the split's canonical member order (owner first, then member created_at, then id); the parts always sum to the total, the sum is asserted before the write commits, and the 1-unit/3-way and 7-unit/4-way cases name the exact recipient member.",
+        "how_to_verify": "Unit tests over all four split types plus property tests asserting sum and recipient.",
+        "id": "AC-6",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "check": "One member or several can pay: the form offers payer checkboxes with a per-payer amount input and a live payer-sum line, and a mismatching set is refused with the discrepancy named in minor units.",
+        "how_to_verify": "QA records a two-payer expense and observes the payer-sum line before saving.",
+        "id": "AC-7",
+        "source": "IAC-6",
+        "verify": "browser"
+      },
+      {
+        "check": "Each payer's part is stored in expense_payer with the parts summing exactly to the total; a duplicate payer row is a typed refusal naming the member, not a constraint 500; a payer who is not a split participant is accepted.",
+        "how_to_verify": "Integration test covers two-payer success, mismatch rejection, duplicate refusal and payer-outside-split.",
+        "id": "AC-8",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "The expense stores the entered rule — split_type plus one expense_split_input row per included member with the number given for them (minor units / hundredths of a percent / share count / null for equal) — beside the produced payer and share rows; a source-scan test asserts no balance-reading module imports the split function.",
+        "how_to_verify": "Integration test asserts stored inputs round-trip with positions; source-scan test guards the read path.",
+        "id": "AC-9",
+        "source": "IAC-7",
+        "verify": "test"
+      },
+      {
+        "check": "The live summary resolves the split as it is edited using the same split() the server calls, and for an invalid split states exactly what is off and by how much.",
+        "how_to_verify": "QA edits each split type and watches the summary update before saving.",
+        "id": "AC-10",
+        "source": "IAC-8",
+        "verify": "browser"
+      },
+      {
+        "check": "The form is fully keyboard-operable at 360px with no horizontal scrolling and completable under 60 seconds; a field error moves focus to the first invalid field and keeps every typed value.",
+        "how_to_verify": "QA tabs through at 360px and submits an invalid split.",
+        "id": "AC-11",
+        "source": "IAC-9",
+        "verify": "browser"
+      },
+      {
+        "check": "Every amount renders through formatMinor in the group's currency with correct symbol, separators and fraction digits, right-aligned in tabular figures (a plain mono span, not the direction-worded Money primitive); the category chip shows when a category is set.",
+        "how_to_verify": "QA checks the list column and chips at 360px and desktop.",
+        "id": "AC-12",
+        "source": "IAC-10",
+        "verify": "browser"
+      },
+      {
+        "check": "The expense list is newest first by expense date (created_at then id breaking ties), one row per expense showing description, amount, who paid, the date and the category chip when set; a group with no expenses shows the no-expenses-yet state with Add expense.",
+        "how_to_verify": "QA records dated expenses and checks order; fresh group shows the empty state.",
+        "id": "AC-13",
+        "source": "IAC-11",
+        "verify": "browser"
+      },
+      {
+        "check": "Recording an expense writes exactly one expense.added activity entry carrying subject and detail in the same transaction; a write forced to fail after the expense row leaves no entry.",
+        "how_to_verify": "Integration test with the recordActivity-throw pattern.",
+        "id": "AC-14",
+        "source": "IAC-12",
+        "verify": "test"
+      },
+      {
+        "check": "Property tests over 10,000 random totals, member counts and split types assert the sum invariant and the remainder recipient, including 1-unit/3-way and 7-unit/4-way; a tsc @ts-expect-error probe proves a number is not assignable to a money bigint.",
+        "how_to_verify": "vitest run plus the type probe in tests/lib/money.test.ts.",
+        "id": "AC-15",
+        "source": "IAC-13",
+        "verify": "test"
+      },
+      {
+        "check": "A non-member's createExpense writes no row and gets the same refusal as a missing group; readExpensesForGroup returns nothing for a non-member.",
+        "how_to_verify": "Integration test as a second user against a group they do not belong to.",
+        "id": "AC-16",
+        "source": "TR-1",
+        "verify": "test"
+      },
+      {
+        "check": "parseMajorUnits scales by the currency's own fraction digits (JPY zero-digit and BHD three-digit round-trips), rejects excess fraction digits, grouping separators, non-ASCII digits and signed values naming what is off, and never round-trips through Number above MAX_SAFE_INTEGER.",
+        "how_to_verify": "Unit tests in tests/lib/money.test.ts.",
+        "id": "AC-17",
+        "source": "IAC-1",
+        "verify": "test"
+      },
+      {
+        "check": "Zero and negative amounts, whitespace-only descriptions and over-length input are rejected beside their fields; the expense date is stored as a calendar date so no timezone shift reorders the newest-first list; Save disables while pending so a double submit writes one expense and one entry.",
+        "how_to_verify": "Integration and component tests plus QA double-click check.",
+        "id": "AC-18",
+        "source": "IAC-1",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Store an explicit position column on expense_split_input to record submission order.",
+        "rejected_because": "TRD fixes the row shape at expense_id, member_id and input_value and docs are frozen; the canonical picker order (owner first, then member created_at, then id) reconstructs entry order deterministically without schema drift."
+      },
+      {
+        "approach": "Introduce a branded MinorUnits type across money.ts and its call sites.",
+        "rejected_because": "As scoped it enforced nothing (plain bigint already rejects number at type level); the honest smaller change is a tsc probe on bigint plus property tests, leaving the conventions-promised lint rule for its own ticket."
+      },
+      {
+        "approach": "Split multi-payer entry into a follow-up ticket and defer IAC-6.",
+        "rejected_because": "The issue text clubs the several-payer input into this piece on purpose and calls it the money core to be reviewed as one unit; deferring it would also strand the first-payer remainder rule with no payer surface to apply to."
+      }
+    ],
+    "approach": "Extend money.ts with string-based parseMajorUnits (scaled by the currency's own fractionDigits, never through Number) and a single pure split() that both the client live summary and the server write path call, so there is exactly one remainder implementation. Pin the remainder recipient the requirement names: the entire floor-division remainder goes to the first payer in the split's canonical member order (owner first, then member created_at, then id), which the server derives from the members table rather than trusting client submission order. Add the TRD-shaped expense tables (expense_split_type and expense_category enums; expenses with amount_minor, currency, split_type, category, note and calendar date; expense_payer, expense_share, expense_split_input per TRD units) plus the TRD-specified activity subject/detail columns that the current schema is missing, with expense.added written in the same transaction. Build the one-pass form with payer checkboxes plus per-payer amounts, participant picker, split-type control, category select and live summary, returning typed action results; authorise the write and the list read with the in-query memberOfGroup predicate. Keep the existing formatMinor name (it is the TRD's formatMinorUnits, no rename, no duplicate) and render expense amounts in a plain tabular mono span rather than the direction-worded Money primitive. Touch no frozen docs and no framework paths.",
+    "assumptions": [
+      "The participant picker's order (owner first, then member created_at) is stable enough to serve as the canonical split member order, so no ordinal column is needed to satisfy the binding 'reopen in the order saved' decision for piece 5.",
+      "Placeholder members may be payers and participants (trips are recorded before everyone signs up); a member removed between form render and submit fails server validation with a form-level error.",
+      "Type-level number-exclusion via bigint plus a tsc probe satisfies TR-2's 'lint or type rule' clause for this piece; the bespoke eslint rule conventions.md names is a separate ticket (noted in risks)."
+    ],
+    "confidence": 75,
+    "confidence_rationale": "The critique's evidence checked out file by file against schema.ts, money.ts, access.ts, migrate.ts, money.tsx, eslint config and ui.md/TRD, and every gap now has a named file, test and criterion. What keeps this at 75 rather than 90 is that the payer-entry UX is designed from the issue text alone (ui.md regions never name a payer control), the generated migration snapshot/journal contents are unwritten until drizzle-kit runs, and browser QA has not yet timed the one-pass flow.",
+    "debate_summary": "The critique was right on all fifteen findings, so none was dismissed: the two blocking ones (remainder recipient mis-stated as first submitted participant instead of TR-3's first payer in member order; multi-payer entry surface missing from the form and browser criteria) are fixed by pinning the canonical member order and adding payer inputs with AC-7/AC-8. The thirteen majors/minors were folded in — category enum/column/chip, activity subject/detail columns, in-query authorisation plus non-member refusal test, currency-aware parsing tests, journal plus snapshot in files[], dropping the no-op brand for a tsc probe on bigint, a real tests[] table, the zero-participant guard, expenses loading.tsx, the IAC-11 filter-half deferral, plain-span amount rendering, the formatMinor naming note, and the assumptions/unknowns/alternatives this order now carries. No finding contradicted the binding brief decisions (store the rule from the first expense; balances read only payer/share rows) — the proposal already honoured them and this order keeps them. Judgement calls of my own: edge cases about zero/negative/signed amounts, over-precision input, grouping separators, duplicate payers, payers outside the split, single-participant splits, zero-valued shares and calendar-date storage were promoted into criteria and tests, while back-button behaviour, emoji/RTL truncation and two-tab races stay as residual risks for QA.",
+    "evidence": [
+      "src/db/schema.ts:135-170 activity table has no subject/detail columns; activityKinds lacks expense.added",
+      "src/lib/money.ts:15-50 fractionDigits and formatMinor exist; no parseMajorUnits, no split",
+      "src/lib/access.ts:124-126 memberOfGroup predicate precedent; :221,283 balanceMinor 0n literals",
+      "src/db/migrate.ts:39-57 journal is the migration order; unlisted .sql never applies",
+      "docs/trd.md:23 TR-3 first payer in member order; :261 expense category/note; :295-301 activity subject/detail; :364 money boundary",
+      "docs/ui.md:134-156 expenses list and form regions with no payer control; :138,:140 loading and error states",
+      "src/components/ui/money.tsx:10 direction-worded primitive, wrong for bare expense amounts",
+      "eslint.config.mjs: no money lint rule despite conventions.md promising one",
+      "plan/proposal.json: no tests[] key; AC-5/AC-6 wording vs TR-3; AC-11 drops the filter half with no deferral"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add expense_split_type and expense_category pgEnums; expenses, expense_payer, expense_share and expense_split_input tables per TRD units; subject_type/subject_id/detail columns on activity; expense.added in activityKinds.",
+        "path": "src/db/schema.ts",
+        "why": "Single description of the data model, aligned to the already-approved TRD."
+      },
+      {
+        "action": "create",
+        "change": "Generated by drizzle-kit generate with statement-breakpoint markers; applies to PGlite and Neon on boot.",
+        "path": "drizzle/0003_expenses.sql",
+        "why": "Schema history for the new tables."
+      },
+      {
+        "action": "create",
+        "change": "Generated drizzle-kit snapshot for 0003; the committed snapshot is what diffs are checked against.",
+        "path": "drizzle/meta/0003_snapshot.json"
+      },
+      {
+        "action": "edit",
+        "change": "Register the 0003 entry; the journal is the order loadMigrations applies, so the .sql alone is not a migration.",
+        "path": "drizzle/meta/_journal.json"
+      },
+      {
+        "action": "edit",
+        "change": "Add currency-aware parseMajorUnits (fractionDigits scaling, no Number round-trip) and the single pure split() with remainder-to-first-payer and typed errors; formatMinor untouched and not renamed.",
+        "path": "src/lib/money.ts",
+        "why": "All money arithmetic lives here and only here."
+      },
+      {
+        "action": "edit",
+        "change": "Add readExpensesForGroup and createExpenseWithRows with the memberOfGroup predicate inside the statements and pre-commit sum assertions.",
+        "path": "src/lib/access.ts",
+        "why": "Authorisation boundary and write-helper precedent."
+      },
+      {
+        "action": "create",
+        "change": "createExpense action: Zod schemas in-file, authorisation helper first, one transaction for expense plus payer/share/input rows plus the activity entry, typed { ok, fieldErrors, formError } result.",
+        "path": "src/app/actions/expenses.ts",
+        "why": "One file per noun; errors returned, never thrown."
+      },
+      {
+        "action": "create",
+        "change": "'use client' one-pass form: description, amount with fixed currency symbol, date, category select, note, payer checkboxes with per-payer amounts and payer-sum line, participant picker defaulting to all active, split-type control swapping inputs, live summary calling split(), focus to first invalid keeping values; imports money.ts only, never db or auth.",
+        "path": "src/components/expense-form.tsx",
+        "why": "Interactive split inputs and live summary need a Client Component."
+      },
+      {
+        "action": "create",
+        "change": "Server-rendered newest-first rows (description, formatMinor amount in tabular mono span, payers, date, category chip) with the no-expenses-yet empty state and inline error keeping filters.",
+        "path": "src/components/expense-list.tsx",
+        "why": "Presentational list body."
+      },
+      {
+        "action": "create",
+        "change": "Server Component list page with membership-checked reads and skeleton/error states.",
+        "path": "src/app/(app)/groups/[id]/expenses/page.tsx",
+        "why": "Expenses screen."
+      },
+      {
+        "action": "create",
+        "change": "Server Component rendering ExpenseForm with the group currency and active members in canonical order.",
+        "path": "src/app/(app)/groups/[id]/expenses/new/page.tsx",
+        "why": "New-expense screen."
+      },
+      {
+        "action": "create",
+        "change": "Five skeleton rows at list-row height matching the real row shape.",
+        "path": "src/app/(app)/groups/[id]/expenses/loading.tsx",
+        "why": "Every reachable loading state is designed."
+      },
+      {
+        "action": "edit",
+        "change": "Add Add expense and Expenses links to the action row and the expense.added describe() sentence; the exhaustive Record forces the sentence at compile time.",
+        "path": "src/components/group-overview.tsx",
+        "why": "Links reserved for #6; missing kind is a compile error by design."
+      }
+    ],
+    "issue": 6,
+    "kind": "feature",
+    "mode": "committed",
+    "out_of_scope": [
+      "IAC-11 (filters/search half): member and category filters, description search, their composition and the 'no expenses match these filters' state ship in piece 8 per the issue's out-of-scope; this piece renders only the 'no expenses yet' empty state.",
+      "Editing or deleting an expense — piece 5, which reads back the rule rows and positions stored here.",
+      "Balances, simplified debts and payments — pieces 6 and 7; balances keep rendering the zero literals and the settled sentence until then.",
+      "Activity feed screens — piece 8; expense.added rows carry subject and detail now so those screens can read them later."
+    ],
+    "qa_script": [
+      "Sign up, create a group with three members, open /groups/[id]/expenses and record one expense of each split type including a two-payer expense; confirm the list is newest-first with payers, dates and category chips.",
+      "At 360px using keyboard only, submit an invalid exact-amount split and confirm focus lands on the first invalid field with every typed value kept and the shortfall named in minor units.",
+      "Uncheck every participant and submit; confirm a picker-beside error and nothing written. As a second signed-in non-member, open the group URL and confirm 404 with no data."
+    ],
+    "residual_risks": [
+      "Two tabs submitting at once and the back button onto a submitted form have no dedicated test; Save disables while pending, which covers the double-click but not the race.",
+      "Emoji, RTL and ceiling-length descriptions in truncating rows are validated for shape (non-empty, length cap) but their visual truncation is QA-only.",
+      "The overview recent-activity block will show an amount-less 'added an expense' line until the feed screens of piece 8 render subject/detail.",
+      "Balances stay zero literals with the settled sentence until pieces 6 and 7; a group with expenses still reads 'Everyone's square in this group.'",
+      "The Neon production path is covered by tests plus a human preview check, not by CI; a hand-edited migration missing breakpoint markers fails on both backends, so the .sql must be generator output."
+    ],
+    "risks": [
+      "No frozen doc (docs/prd.md, docs/trd.md, docs/ui.md) and no framework path (.github/**, .sdlc/**) is touched; the schema additions implement the already-approved TRD data model rather than revising it.",
+      "conventions.md promises an eslint rule that a money value is never typed as number, which does not exist; this piece proves number-exclusion with a tsc probe instead and leaves the lint rule for its own ticket.",
+      "The new enum and four tables ship to Neon on the next production boot through migrate.ts; only generator-produced SQL with breakpoint markers is acceptable."
+    ],
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "parseMajorUnits JPY/BHD round-trips and rejects excess fraction digits, separators and signs",
+          "1-unit/3-way and 7-unit/4-way remainder names the exact first-payer recipient; single participant takes all",
+          "10,000-case property tests for sum invariant and recipient; tsc @ts-expect-error probe for number-to-money"
+        ],
+        "path": "tests/lib/money.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "two-payer success and mismatch/dup-payer typed refusals; payer outside the split accepted",
+          "non-member createExpense writes nothing; exact/percentage shortfalls name minor units with tables unchanged",
+          "zero-participant picker error; rule rows round-trip with canonical positions; exactly one activity entry and none on forced failure",
+          "zero/negative/whitespace inputs rejected; stale-member submit refused; category round-trips and null stays null"
+        ],
+        "path": "tests/integration/expenses.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "split-type control swaps inputs without navigating; live summary states the shortfall",
+          "failed submit focuses the first invalid field and keeps every value",
+          "payer-sum line updates as payer amounts are edited"
+        ],
+        "path": "tests/components/expense-form.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "fresh PGlite schema includes the four expense tables, both enums and the activity subject/detail columns"
+        ],
+        "path": "tests/integration/migrations.test.ts"
+      }
+    ],
+    "understanding": "Issue #6 builds expense recording: a one-pass form (description, amount, date, optional category and note, one-or-several payers, four split types) plus a newest-first list, backed by the expenses, expense_payer, expense_share and expense_split_input tables and the parse/split core in money.ts. The binding brief decisions require storing the entered rule beside the produced shares from the first expense, with balances reading only payer/share rows; creation only — edit/delete (piece 5), filters/search/feed (piece 8) and balances/payments (pieces 6-7) are out.",
+    "unknowns": [
+      "Whether QA's seeded currencies include a zero- or three-fraction-digit case to exercise the JPY/BHD parse paths in the browser (unit tests cover the logic regardless).",
+      "Whether the QA timing rig can complete the one-pass flow under 60 seconds on the seeded group at 360px; the form is one screen with defaults favouring speed."
+    ],
+    "version": 1
+  },
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [
@@ -76,630 +386,12 @@
   },
   "stopped_at": null,
   "dispatched_stage": "plan",
-  "validated_work_order": {
-    "acceptance": [
-      {
-        "check": "A signed-in member records an expense from /groups/[id]/expenses in one pass — description, amount, date, optional category (food, travel, rent, utilities, shopping, entertainment, other) and optional note — and the amount reaches the database as integer minor units with no float anywhere on the path.",
-        "how_to_verify": "QA signs up, creates a group, records an expense and sees it listed; integration test asserts stored amount_minor.",
-        "id": "AC-1",
-        "source": "IAC-1",
-        "verify": "browser"
-      },
-      {
-        "check": "All four split types (equally, exact amounts, percentages, shares) work from the same screen and switching the split-type control swaps the inputs shown without navigating.",
-        "how_to_verify": "QA records one expense of each split type from the same screen.",
-        "id": "AC-2",
-        "source": "IAC-2",
-        "verify": "browser"
-      },
-      {
-        "check": "The participant picker defaults to every active member on a new expense.",
-        "how_to_verify": "QA opens the new-expense form and sees every active member checked.",
-        "id": "AC-3",
-        "source": "IAC-3",
-        "verify": "browser"
-      },
-      {
-        "check": "An unchecked member gets no expense_share row and no expense_split_input row; unchecking everyone is rejected with a field error beside the picker and nothing is written.",
-        "how_to_verify": "Integration test unchecks one member then all members and asserts row absence plus the picker error.",
-        "id": "AC-4",
-        "source": "IAC-3",
-        "verify": "test"
-      },
-      {
-        "check": "Exact amounts that do not sum to the total and percentages that do not sum to 100 are rejected beside the field that caused them, naming the minor-unit shortfall, and no expense row is written.",
-        "how_to_verify": "Integration test asserts the typed field error and unchanged tables.",
-        "id": "AC-5",
-        "source": "IAC-4",
-        "verify": "test"
-      },
-      {
-        "check": "An equal, percentage or share split whose total does not divide evenly assigns its entire floor-division remainder to the first payer in the split's canonical member order (owner first, then member created_at, then id); the parts always sum to the total, the sum is asserted before the write commits, and the 1-unit/3-way and 7-unit/4-way cases name the exact recipient member.",
-        "how_to_verify": "Unit tests over all four split types plus property tests asserting sum and recipient.",
-        "id": "AC-6",
-        "source": "IAC-5",
-        "verify": "test"
-      },
-      {
-        "check": "One member or several can pay: the form offers payer checkboxes with a per-payer amount input and a live payer-sum line, and a mismatching set is refused with the discrepancy named in minor units.",
-        "how_to_verify": "QA records a two-payer expense and observes the payer-sum line before saving.",
-        "id": "AC-7",
-        "source": "IAC-6",
-        "verify": "browser"
-      },
-      {
-        "check": "Each payer's part is stored in expense_payer with the parts summing exactly to the total; a duplicate payer row is a typed refusal naming the member, not a constraint 500; a payer who is not a split participant is accepted.",
-        "how_to_verify": "Integration test covers two-payer success, mismatch rejection, duplicate refusal and payer-outside-split.",
-        "id": "AC-8",
-        "source": "IAC-6",
-        "verify": "test"
-      },
-      {
-        "check": "The expense stores the entered rule — split_type plus one expense_split_input row per included member with the number given for them (minor units / hundredths of a percent / share count / null for equal) — beside the produced payer and share rows; a source-scan test asserts no balance-reading module imports the split function.",
-        "how_to_verify": "Integration test asserts stored inputs round-trip with positions; source-scan test guards the read path.",
-        "id": "AC-9",
-        "source": "IAC-7",
-        "verify": "test"
-      },
-      {
-        "check": "The live summary resolves the split as it is edited using the same split() the server calls, and for an invalid split states exactly what is off and by how much.",
-        "how_to_verify": "QA edits each split type and watches the summary update before saving.",
-        "id": "AC-10",
-        "source": "IAC-8",
-        "verify": "browser"
-      },
-      {
-        "check": "The form is fully keyboard-operable at 360px with no horizontal scrolling and completable under 60 seconds; a field error moves focus to the first invalid field and keeps every typed value.",
-        "how_to_verify": "QA tabs through at 360px and submits an invalid split.",
-        "id": "AC-11",
-        "source": "IAC-9",
-        "verify": "browser"
-      },
-      {
-        "check": "Every amount renders through formatMinor in the group's currency with correct symbol, separators and fraction digits, right-aligned in tabular figures (a plain mono span, not the direction-worded Money primitive); the category chip shows when a category is set.",
-        "how_to_verify": "QA checks the list column and chips at 360px and desktop.",
-        "id": "AC-12",
-        "source": "IAC-10",
-        "verify": "browser"
-      },
-      {
-        "check": "The expense list is newest first by expense date (created_at then id breaking ties), one row per expense showing description, amount, who paid, the date and the category chip when set; a group with no expenses shows the no-expenses-yet state with Add expense.",
-        "how_to_verify": "QA records dated expenses and checks order; fresh group shows the empty state.",
-        "id": "AC-13",
-        "source": "IAC-11",
-        "verify": "browser"
-      },
-      {
-        "check": "Recording an expense writes exactly one expense.added activity entry carrying subject and detail in the same transaction; a write forced to fail after the expense row leaves no entry.",
-        "how_to_verify": "Integration test with the recordActivity-throw pattern.",
-        "id": "AC-14",
-        "source": "IAC-12",
-        "verify": "test"
-      },
-      {
-        "check": "Property tests over 10,000 random totals, member counts and split types assert the sum invariant and the remainder recipient, including 1-unit/3-way and 7-unit/4-way; a tsc @ts-expect-error probe proves a number is not assignable to a money bigint.",
-        "how_to_verify": "vitest run plus the type probe in tests/lib/money.test.ts.",
-        "id": "AC-15",
-        "source": "IAC-13",
-        "verify": "test"
-      },
-      {
-        "check": "A non-member's createExpense writes no row and gets the same refusal as a missing group; readExpensesForGroup returns nothing for a non-member.",
-        "how_to_verify": "Integration test as a second user against a group they do not belong to.",
-        "id": "AC-16",
-        "source": "TR-1",
-        "verify": "test"
-      },
-      {
-        "check": "parseMajorUnits scales by the currency's own fraction digits (JPY zero-digit and BHD three-digit round-trips), rejects excess fraction digits, grouping separators, non-ASCII digits and signed values naming what is off, and never round-trips through Number above MAX_SAFE_INTEGER.",
-        "how_to_verify": "Unit tests in tests/lib/money.test.ts.",
-        "id": "AC-17",
-        "source": "IAC-1",
-        "verify": "test"
-      },
-      {
-        "check": "Zero and negative amounts, whitespace-only descriptions and over-length input are rejected beside their fields; the expense date is stored as a calendar date so no timezone shift reorders the newest-first list; Save disables while pending so a double submit writes one expense and one entry.",
-        "how_to_verify": "Integration and component tests plus QA double-click check.",
-        "id": "AC-18",
-        "source": "IAC-1",
-        "verify": "test"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Store an explicit position column on expense_split_input to record submission order.",
-        "rejected_because": "TRD fixes the row shape at expense_id, member_id and input_value and docs are frozen; the canonical picker order (owner first, then member created_at, then id) reconstructs entry order deterministically without schema drift."
-      },
-      {
-        "approach": "Introduce a branded MinorUnits type across money.ts and its call sites.",
-        "rejected_because": "As scoped it enforced nothing (plain bigint already rejects number at type level); the honest smaller change is a tsc probe on bigint plus property tests, leaving the conventions-promised lint rule for its own ticket."
-      },
-      {
-        "approach": "Split multi-payer entry into a follow-up ticket and defer IAC-6.",
-        "rejected_because": "The issue text clubs the several-payer input into this piece on purpose and calls it the money core to be reviewed as one unit; deferring it would also strand the first-payer remainder rule with no payer surface to apply to."
-      }
-    ],
-    "approach": "Extend money.ts with string-based parseMajorUnits (scaled by the currency's own fractionDigits, never through Number) and a single pure split() that both the client live summary and the server write path call, so there is exactly one remainder implementation. Pin the remainder recipient the requirement names: the entire floor-division remainder goes to the first payer in the split's canonical member order (owner first, then member created_at, then id), which the server derives from the members table rather than trusting client submission order. Add the TRD-shaped expense tables (expense_split_type and expense_category enums; expenses with amount_minor, currency, split_type, category, note and calendar date; expense_payer, expense_share, expense_split_input per TRD units) plus the TRD-specified activity subject/detail columns that the current schema is missing, with expense.added written in the same transaction. Build the one-pass form with payer checkboxes plus per-payer amounts, participant picker, split-type control, category select and live summary, returning typed action results; authorise the write and the list read with the in-query memberOfGroup predicate. Keep the existing formatMinor name (it is the TRD's formatMinorUnits, no rename, no duplicate) and render expense amounts in a plain tabular mono span rather than the direction-worded Money primitive. Touch no frozen docs and no framework paths.",
-    "assumptions": [
-      "The participant picker's order (owner first, then member created_at) is stable enough to serve as the canonical split member order, so no ordinal column is needed to satisfy the binding 'reopen in the order saved' decision for piece 5.",
-      "Placeholder members may be payers and participants (trips are recorded before everyone signs up); a member removed between form render and submit fails server validation with a form-level error.",
-      "Type-level number-exclusion via bigint plus a tsc probe satisfies TR-2's 'lint or type rule' clause for this piece; the bespoke eslint rule conventions.md names is a separate ticket (noted in risks)."
-    ],
-    "confidence": 75,
-    "confidence_rationale": "The critique's evidence checked out file by file against schema.ts, money.ts, access.ts, migrate.ts, money.tsx, eslint config and ui.md/TRD, and every gap now has a named file, test and criterion. What keeps this at 75 rather than 90 is that the payer-entry UX is designed from the issue text alone (ui.md regions never name a payer control), the generated migration snapshot/journal contents are unwritten until drizzle-kit runs, and browser QA has not yet timed the one-pass flow.",
-    "debate_summary": "The critique was right on all fifteen findings, so none was dismissed: the two blocking ones (remainder recipient mis-stated as first submitted participant instead of TR-3's first payer in member order; multi-payer entry surface missing from the form and browser criteria) are fixed by pinning the canonical member order and adding payer inputs with AC-7/AC-8. The thirteen majors/minors were folded in — category enum/column/chip, activity subject/detail columns, in-query authorisation plus non-member refusal test, currency-aware parsing tests, journal plus snapshot in files[], dropping the no-op brand for a tsc probe on bigint, a real tests[] table, the zero-participant guard, expenses loading.tsx, the IAC-11 filter-half deferral, plain-span amount rendering, the formatMinor naming note, and the assumptions/unknowns/alternatives this order now carries. No finding contradicted the binding brief decisions (store the rule from the first expense; balances read only payer/share rows) — the proposal already honoured them and this order keeps them. Judgement calls of my own: edge cases about zero/negative/signed amounts, over-precision input, grouping separators, duplicate payers, payers outside the split, single-participant splits, zero-valued shares and calendar-date storage were promoted into criteria and tests, while back-button behaviour, emoji/RTL truncation and two-tab races stay as residual risks for QA.",
-    "evidence": [
-      "src/db/schema.ts:135-170 activity table has no subject/detail columns; activityKinds lacks expense.added",
-      "src/lib/money.ts:15-50 fractionDigits and formatMinor exist; no parseMajorUnits, no split",
-      "src/lib/access.ts:124-126 memberOfGroup predicate precedent; :221,283 balanceMinor 0n literals",
-      "src/db/migrate.ts:39-57 journal is the migration order; unlisted .sql never applies",
-      "docs/trd.md:23 TR-3 first payer in member order; :261 expense category/note; :295-301 activity subject/detail; :364 money boundary",
-      "docs/ui.md:134-156 expenses list and form regions with no payer control; :138,:140 loading and error states",
-      "src/components/ui/money.tsx:10 direction-worded primitive, wrong for bare expense amounts",
-      "eslint.config.mjs: no money lint rule despite conventions.md promising one",
-      "plan/proposal.json: no tests[] key; AC-5/AC-6 wording vs TR-3; AC-11 drops the filter half with no deferral"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "Add expense_split_type and expense_category pgEnums; expenses, expense_payer, expense_share and expense_split_input tables per TRD units; subject_type/subject_id/detail columns on activity; expense.added in activityKinds.",
-        "path": "src/db/schema.ts",
-        "why": "Single description of the data model, aligned to the already-approved TRD."
-      },
-      {
-        "action": "create",
-        "change": "Generated by drizzle-kit generate with statement-breakpoint markers; applies to PGlite and Neon on boot.",
-        "path": "drizzle/0003_expenses.sql",
-        "why": "Schema history for the new tables."
-      },
-      {
-        "action": "create",
-        "change": "Generated drizzle-kit snapshot for 0003; the committed snapshot is what diffs are checked against.",
-        "path": "drizzle/meta/0003_snapshot.json"
-      },
-      {
-        "action": "edit",
-        "change": "Register the 0003 entry; the journal is the order loadMigrations applies, so the .sql alone is not a migration.",
-        "path": "drizzle/meta/_journal.json"
-      },
-      {
-        "action": "edit",
-        "change": "Add currency-aware parseMajorUnits (fractionDigits scaling, no Number round-trip) and the single pure split() with remainder-to-first-payer and typed errors; formatMinor untouched and not renamed.",
-        "path": "src/lib/money.ts",
-        "why": "All money arithmetic lives here and only here."
-      },
-      {
-        "action": "edit",
-        "change": "Add readExpensesForGroup and createExpenseWithRows with the memberOfGroup predicate inside the statements and pre-commit sum assertions.",
-        "path": "src/lib/access.ts",
-        "why": "Authorisation boundary and write-helper precedent."
-      },
-      {
-        "action": "create",
-        "change": "createExpense action: Zod schemas in-file, authorisation helper first, one transaction for expense plus payer/share/input rows plus the activity entry, typed { ok, fieldErrors, formError } result.",
-        "path": "src/app/actions/expenses.ts",
-        "why": "One file per noun; errors returned, never thrown."
-      },
-      {
-        "action": "create",
-        "change": "'use client' one-pass form: description, amount with fixed currency symbol, date, category select, note, payer checkboxes with per-payer amounts and payer-sum line, participant picker defaulting to all active, split-type control swapping inputs, live summary calling split(), focus to first invalid keeping values; imports money.ts only, never db or auth.",
-        "path": "src/components/expense-form.tsx",
-        "why": "Interactive split inputs and live summary need a Client Component."
-      },
-      {
-        "action": "create",
-        "change": "Server-rendered newest-first rows (description, formatMinor amount in tabular mono span, payers, date, category chip) with the no-expenses-yet empty state and inline error keeping filters.",
-        "path": "src/components/expense-list.tsx",
-        "why": "Presentational list body."
-      },
-      {
-        "action": "create",
-        "change": "Server Component list page with membership-checked reads and skeleton/error states.",
-        "path": "src/app/(app)/groups/[id]/expenses/page.tsx",
-        "why": "Expenses screen."
-      },
-      {
-        "action": "create",
-        "change": "Server Component rendering ExpenseForm with the group currency and active members in canonical order.",
-        "path": "src/app/(app)/groups/[id]/expenses/new/page.tsx",
-        "why": "New-expense screen."
-      },
-      {
-        "action": "create",
-        "change": "Five skeleton rows at list-row height matching the real row shape.",
-        "path": "src/app/(app)/groups/[id]/expenses/loading.tsx",
-        "why": "Every reachable loading state is designed."
-      },
-      {
-        "action": "edit",
-        "change": "Add Add expense and Expenses links to the action row and the expense.added describe() sentence; the exhaustive Record forces the sentence at compile time.",
-        "path": "src/components/group-overview.tsx",
-        "why": "Links reserved for #6; missing kind is a compile error by design."
-      }
-    ],
-    "issue": 6,
-    "kind": "feature",
-    "mode": "committed",
-    "out_of_scope": [
-      "IAC-11 (filters/search half): member and category filters, description search, their composition and the 'no expenses match these filters' state ship in piece 8 per the issue's out-of-scope; this piece renders only the 'no expenses yet' empty state.",
-      "Editing or deleting an expense — piece 5, which reads back the rule rows and positions stored here.",
-      "Balances, simplified debts and payments — pieces 6 and 7; balances keep rendering the zero literals and the settled sentence until then.",
-      "Activity feed screens — piece 8; expense.added rows carry subject and detail now so those screens can read them later."
-    ],
-    "qa_script": [
-      "Sign up, create a group with three members, open /groups/[id]/expenses and record one expense of each split type including a two-payer expense; confirm the list is newest-first with payers, dates and category chips.",
-      "At 360px using keyboard only, submit an invalid exact-amount split and confirm focus lands on the first invalid field with every typed value kept and the shortfall named in minor units.",
-      "Uncheck every participant and submit; confirm a picker-beside error and nothing written. As a second signed-in non-member, open the group URL and confirm 404 with no data."
-    ],
-    "residual_risks": [
-      "Two tabs submitting at once and the back button onto a submitted form have no dedicated test; Save disables while pending, which covers the double-click but not the race.",
-      "Emoji, RTL and ceiling-length descriptions in truncating rows are validated for shape (non-empty, length cap) but their visual truncation is QA-only.",
-      "The overview recent-activity block will show an amount-less 'added an expense' line until the feed screens of piece 8 render subject/detail.",
-      "Balances stay zero literals with the settled sentence until pieces 6 and 7; a group with expenses still reads 'Everyone's square in this group.'",
-      "The Neon production path is covered by tests plus a human preview check, not by CI; a hand-edited migration missing breakpoint markers fails on both backends, so the .sql must be generator output."
-    ],
-    "risks": [
-      "No frozen doc (docs/prd.md, docs/trd.md, docs/ui.md) and no framework path (.github/**, .sdlc/**) is touched; the schema additions implement the already-approved TRD data model rather than revising it.",
-      "conventions.md promises an eslint rule that a money value is never typed as number, which does not exist; this piece proves number-exclusion with a tsc probe instead and leaves the lint rule for its own ticket.",
-      "The new enum and four tables ship to Neon on the next production boot through migrate.ts; only generator-produced SQL with breakpoint markers is acceptable."
-    ],
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "parseMajorUnits JPY/BHD round-trips and rejects excess fraction digits, separators and signs",
-          "1-unit/3-way and 7-unit/4-way remainder names the exact first-payer recipient; single participant takes all",
-          "10,000-case property tests for sum invariant and recipient; tsc @ts-expect-error probe for number-to-money"
-        ],
-        "path": "tests/lib/money.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "two-payer success and mismatch/dup-payer typed refusals; payer outside the split accepted",
-          "non-member createExpense writes nothing; exact/percentage shortfalls name minor units with tables unchanged",
-          "zero-participant picker error; rule rows round-trip with canonical positions; exactly one activity entry and none on forced failure",
-          "zero/negative/whitespace inputs rejected; stale-member submit refused; category round-trips and null stays null"
-        ],
-        "path": "tests/integration/expenses.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "split-type control swaps inputs without navigating; live summary states the shortfall",
-          "failed submit focuses the first invalid field and keeps every value",
-          "payer-sum line updates as payer amounts are edited"
-        ],
-        "path": "tests/components/expense-form.test.tsx"
-      },
-      {
-        "action": "edit",
-        "cases": [
-          "fresh PGlite schema includes the four expense tables, both enums and the activity subject/detail columns"
-        ],
-        "path": "tests/integration/migrations.test.ts"
-      }
-    ],
-    "understanding": "Issue #6 builds expense recording: a one-pass form (description, amount, date, optional category and note, one-or-several payers, four split types) plus a newest-first list, backed by the expenses, expense_payer, expense_share and expense_split_input tables and the parse/split core in money.ts. The binding brief decisions require storing the entered rule beside the produced shares from the first expense, with balances reading only payer/share rows; creation only — edit/delete (piece 5), filters/search/feed (piece 8) and balances/payments (pieces 6-7) are out.",
-    "unknowns": [
-      "Whether QA's seeded currencies include a zero- or three-fraction-digit case to exercise the JPY/BHD parse paths in the browser (unit tests cover the logic regardless).",
-      "Whether the QA timing rig can complete the one-pass flow under 60 seconds on the seeded group at 360px; the form is one screen with defaults favouring speed."
-    ],
-    "version": 1
-  },
   "validated_from": "plan",
   "validated_at": "2026-10-02T19:04:55.675Z",
   "validated_ac_changes": [],
-  "approved_work_order": {
-    "acceptance": [
-      {
-        "check": "A signed-in member records an expense from /groups/[id]/expenses in one pass — description, amount, date, optional category (food, travel, rent, utilities, shopping, entertainment, other) and optional note — and the amount reaches the database as integer minor units with no float anywhere on the path.",
-        "how_to_verify": "QA signs up, creates a group, records an expense and sees it listed; integration test asserts stored amount_minor.",
-        "id": "AC-1",
-        "source": "IAC-1",
-        "verify": "browser"
-      },
-      {
-        "check": "All four split types (equally, exact amounts, percentages, shares) work from the same screen and switching the split-type control swaps the inputs shown without navigating.",
-        "how_to_verify": "QA records one expense of each split type from the same screen.",
-        "id": "AC-2",
-        "source": "IAC-2",
-        "verify": "browser"
-      },
-      {
-        "check": "The participant picker defaults to every active member on a new expense.",
-        "how_to_verify": "QA opens the new-expense form and sees every active member checked.",
-        "id": "AC-3",
-        "source": "IAC-3",
-        "verify": "browser"
-      },
-      {
-        "check": "An unchecked member gets no expense_share row and no expense_split_input row; unchecking everyone is rejected with a field error beside the picker and nothing is written.",
-        "how_to_verify": "Integration test unchecks one member then all members and asserts row absence plus the picker error.",
-        "id": "AC-4",
-        "source": "IAC-3",
-        "verify": "test"
-      },
-      {
-        "check": "Exact amounts that do not sum to the total and percentages that do not sum to 100 are rejected beside the field that caused them, naming the minor-unit shortfall, and no expense row is written.",
-        "how_to_verify": "Integration test asserts the typed field error and unchanged tables.",
-        "id": "AC-5",
-        "source": "IAC-4",
-        "verify": "test"
-      },
-      {
-        "check": "An equal, percentage or share split whose total does not divide evenly assigns its entire floor-division remainder to the first payer in the split's canonical member order (owner first, then member created_at, then id); the parts always sum to the total, the sum is asserted before the write commits, and the 1-unit/3-way and 7-unit/4-way cases name the exact recipient member.",
-        "how_to_verify": "Unit tests over all four split types plus property tests asserting sum and recipient.",
-        "id": "AC-6",
-        "source": "IAC-5",
-        "verify": "test"
-      },
-      {
-        "check": "One member or several can pay: the form offers payer checkboxes with a per-payer amount input and a live payer-sum line, and a mismatching set is refused with the discrepancy named in minor units.",
-        "how_to_verify": "QA records a two-payer expense and observes the payer-sum line before saving.",
-        "id": "AC-7",
-        "source": "IAC-6",
-        "verify": "browser"
-      },
-      {
-        "check": "Each payer's part is stored in expense_payer with the parts summing exactly to the total; a duplicate payer row is a typed refusal naming the member, not a constraint 500; a payer who is not a split participant is accepted.",
-        "how_to_verify": "Integration test covers two-payer success, mismatch rejection, duplicate refusal and payer-outside-split.",
-        "id": "AC-8",
-        "source": "IAC-6",
-        "verify": "test"
-      },
-      {
-        "check": "The expense stores the entered rule — split_type plus one expense_split_input row per included member with the number given for them (minor units / hundredths of a percent / share count / null for equal) — beside the produced payer and share rows; a source-scan test asserts no balance-reading module imports the split function.",
-        "how_to_verify": "Integration test asserts stored inputs round-trip with positions; source-scan test guards the read path.",
-        "id": "AC-9",
-        "source": "IAC-7",
-        "verify": "test"
-      },
-      {
-        "check": "The live summary resolves the split as it is edited using the same split() the server calls, and for an invalid split states exactly what is off and by how much.",
-        "how_to_verify": "QA edits each split type and watches the summary update before saving.",
-        "id": "AC-10",
-        "source": "IAC-8",
-        "verify": "browser"
-      },
-      {
-        "check": "The form is fully keyboard-operable at 360px with no horizontal scrolling and completable under 60 seconds; a field error moves focus to the first invalid field and keeps every typed value.",
-        "how_to_verify": "QA tabs through at 360px and submits an invalid split.",
-        "id": "AC-11",
-        "source": "IAC-9",
-        "verify": "browser"
-      },
-      {
-        "check": "Every amount renders through formatMinor in the group's currency with correct symbol, separators and fraction digits, right-aligned in tabular figures (a plain mono span, not the direction-worded Money primitive); the category chip shows when a category is set.",
-        "how_to_verify": "QA checks the list column and chips at 360px and desktop.",
-        "id": "AC-12",
-        "source": "IAC-10",
-        "verify": "browser"
-      },
-      {
-        "check": "The expense list is newest first by expense date (created_at then id breaking ties), one row per expense showing description, amount, who paid, the date and the category chip when set; a group with no expenses shows the no-expenses-yet state with Add expense.",
-        "how_to_verify": "QA records dated expenses and checks order; fresh group shows the empty state.",
-        "id": "AC-13",
-        "source": "IAC-11",
-        "verify": "browser"
-      },
-      {
-        "check": "Recording an expense writes exactly one expense.added activity entry carrying subject and detail in the same transaction; a write forced to fail after the expense row leaves no entry.",
-        "how_to_verify": "Integration test with the recordActivity-throw pattern.",
-        "id": "AC-14",
-        "source": "IAC-12",
-        "verify": "test"
-      },
-      {
-        "check": "Property tests over 10,000 random totals, member counts and split types assert the sum invariant and the remainder recipient, including 1-unit/3-way and 7-unit/4-way; a tsc @ts-expect-error probe proves a number is not assignable to a money bigint.",
-        "how_to_verify": "vitest run plus the type probe in tests/lib/money.test.ts.",
-        "id": "AC-15",
-        "source": "IAC-13",
-        "verify": "test"
-      },
-      {
-        "check": "A non-member's createExpense writes no row and gets the same refusal as a missing group; readExpensesForGroup returns nothing for a non-member.",
-        "how_to_verify": "Integration test as a second user against a group they do not belong to.",
-        "id": "AC-16",
-        "source": "TR-1",
-        "verify": "test"
-      },
-      {
-        "check": "parseMajorUnits scales by the currency's own fraction digits (JPY zero-digit and BHD three-digit round-trips), rejects excess fraction digits, grouping separators, non-ASCII digits and signed values naming what is off, and never round-trips through Number above MAX_SAFE_INTEGER.",
-        "how_to_verify": "Unit tests in tests/lib/money.test.ts.",
-        "id": "AC-17",
-        "source": "IAC-1",
-        "verify": "test"
-      },
-      {
-        "check": "Zero and negative amounts, whitespace-only descriptions and over-length input are rejected beside their fields; the expense date is stored as a calendar date so no timezone shift reorders the newest-first list; Save disables while pending so a double submit writes one expense and one entry.",
-        "how_to_verify": "Integration and component tests plus QA double-click check.",
-        "id": "AC-18",
-        "source": "IAC-1",
-        "verify": "test"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Store an explicit position column on expense_split_input to record submission order.",
-        "rejected_because": "TRD fixes the row shape at expense_id, member_id and input_value and docs are frozen; the canonical picker order (owner first, then member created_at, then id) reconstructs entry order deterministically without schema drift."
-      },
-      {
-        "approach": "Introduce a branded MinorUnits type across money.ts and its call sites.",
-        "rejected_because": "As scoped it enforced nothing (plain bigint already rejects number at type level); the honest smaller change is a tsc probe on bigint plus property tests, leaving the conventions-promised lint rule for its own ticket."
-      },
-      {
-        "approach": "Split multi-payer entry into a follow-up ticket and defer IAC-6.",
-        "rejected_because": "The issue text clubs the several-payer input into this piece on purpose and calls it the money core to be reviewed as one unit; deferring it would also strand the first-payer remainder rule with no payer surface to apply to."
-      }
-    ],
-    "approach": "Extend money.ts with string-based parseMajorUnits (scaled by the currency's own fractionDigits, never through Number) and a single pure split() that both the client live summary and the server write path call, so there is exactly one remainder implementation. Pin the remainder recipient the requirement names: the entire floor-division remainder goes to the first payer in the split's canonical member order (owner first, then member created_at, then id), which the server derives from the members table rather than trusting client submission order. Add the TRD-shaped expense tables (expense_split_type and expense_category enums; expenses with amount_minor, currency, split_type, category, note and calendar date; expense_payer, expense_share, expense_split_input per TRD units) plus the TRD-specified activity subject/detail columns that the current schema is missing, with expense.added written in the same transaction. Build the one-pass form with payer checkboxes plus per-payer amounts, participant picker, split-type control, category select and live summary, returning typed action results; authorise the write and the list read with the in-query memberOfGroup predicate. Keep the existing formatMinor name (it is the TRD's formatMinorUnits, no rename, no duplicate) and render expense amounts in a plain tabular mono span rather than the direction-worded Money primitive. Touch no frozen docs and no framework paths.",
-    "assumptions": [
-      "The participant picker's order (owner first, then member created_at) is stable enough to serve as the canonical split member order, so no ordinal column is needed to satisfy the binding 'reopen in the order saved' decision for piece 5.",
-      "Placeholder members may be payers and participants (trips are recorded before everyone signs up); a member removed between form render and submit fails server validation with a form-level error.",
-      "Type-level number-exclusion via bigint plus a tsc probe satisfies TR-2's 'lint or type rule' clause for this piece; the bespoke eslint rule conventions.md names is a separate ticket (noted in risks)."
-    ],
-    "confidence": 75,
-    "confidence_rationale": "The critique's evidence checked out file by file against schema.ts, money.ts, access.ts, migrate.ts, money.tsx, eslint config and ui.md/TRD, and every gap now has a named file, test and criterion. What keeps this at 75 rather than 90 is that the payer-entry UX is designed from the issue text alone (ui.md regions never name a payer control), the generated migration snapshot/journal contents are unwritten until drizzle-kit runs, and browser QA has not yet timed the one-pass flow.",
-    "debate_summary": "The critique was right on all fifteen findings, so none was dismissed: the two blocking ones (remainder recipient mis-stated as first submitted participant instead of TR-3's first payer in member order; multi-payer entry surface missing from the form and browser criteria) are fixed by pinning the canonical member order and adding payer inputs with AC-7/AC-8. The thirteen majors/minors were folded in — category enum/column/chip, activity subject/detail columns, in-query authorisation plus non-member refusal test, currency-aware parsing tests, journal plus snapshot in files[], dropping the no-op brand for a tsc probe on bigint, a real tests[] table, the zero-participant guard, expenses loading.tsx, the IAC-11 filter-half deferral, plain-span amount rendering, the formatMinor naming note, and the assumptions/unknowns/alternatives this order now carries. No finding contradicted the binding brief decisions (store the rule from the first expense; balances read only payer/share rows) — the proposal already honoured them and this order keeps them. Judgement calls of my own: edge cases about zero/negative/signed amounts, over-precision input, grouping separators, duplicate payers, payers outside the split, single-participant splits, zero-valued shares and calendar-date storage were promoted into criteria and tests, while back-button behaviour, emoji/RTL truncation and two-tab races stay as residual risks for QA.",
-    "evidence": [
-      "src/db/schema.ts:135-170 activity table has no subject/detail columns; activityKinds lacks expense.added",
-      "src/lib/money.ts:15-50 fractionDigits and formatMinor exist; no parseMajorUnits, no split",
-      "src/lib/access.ts:124-126 memberOfGroup predicate precedent; :221,283 balanceMinor 0n literals",
-      "src/db/migrate.ts:39-57 journal is the migration order; unlisted .sql never applies",
-      "docs/trd.md:23 TR-3 first payer in member order; :261 expense category/note; :295-301 activity subject/detail; :364 money boundary",
-      "docs/ui.md:134-156 expenses list and form regions with no payer control; :138,:140 loading and error states",
-      "src/components/ui/money.tsx:10 direction-worded primitive, wrong for bare expense amounts",
-      "eslint.config.mjs: no money lint rule despite conventions.md promising one",
-      "plan/proposal.json: no tests[] key; AC-5/AC-6 wording vs TR-3; AC-11 drops the filter half with no deferral"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "Add expense_split_type and expense_category pgEnums; expenses, expense_payer, expense_share and expense_split_input tables per TRD units; subject_type/subject_id/detail columns on activity; expense.added in activityKinds.",
-        "path": "src/db/schema.ts",
-        "why": "Single description of the data model, aligned to the already-approved TRD."
-      },
-      {
-        "action": "create",
-        "change": "Generated by drizzle-kit generate with statement-breakpoint markers; applies to PGlite and Neon on boot.",
-        "path": "drizzle/0003_expenses.sql",
-        "why": "Schema history for the new tables."
-      },
-      {
-        "action": "create",
-        "change": "Generated drizzle-kit snapshot for 0003; the committed snapshot is what diffs are checked against.",
-        "path": "drizzle/meta/0003_snapshot.json"
-      },
-      {
-        "action": "edit",
-        "change": "Register the 0003 entry; the journal is the order loadMigrations applies, so the .sql alone is not a migration.",
-        "path": "drizzle/meta/_journal.json"
-      },
-      {
-        "action": "edit",
-        "change": "Add currency-aware parseMajorUnits (fractionDigits scaling, no Number round-trip) and the single pure split() with remainder-to-first-payer and typed errors; formatMinor untouched and not renamed.",
-        "path": "src/lib/money.ts",
-        "why": "All money arithmetic lives here and only here."
-      },
-      {
-        "action": "edit",
-        "change": "Add readExpensesForGroup and createExpenseWithRows with the memberOfGroup predicate inside the statements and pre-commit sum assertions.",
-        "path": "src/lib/access.ts",
-        "why": "Authorisation boundary and write-helper precedent."
-      },
-      {
-        "action": "create",
-        "change": "createExpense action: Zod schemas in-file, authorisation helper first, one transaction for expense plus payer/share/input rows plus the activity entry, typed { ok, fieldErrors, formError } result.",
-        "path": "src/app/actions/expenses.ts",
-        "why": "One file per noun; errors returned, never thrown."
-      },
-      {
-        "action": "create",
-        "change": "'use client' one-pass form: description, amount with fixed currency symbol, date, category select, note, payer checkboxes with per-payer amounts and payer-sum line, participant picker defaulting to all active, split-type control swapping inputs, live summary calling split(), focus to first invalid keeping values; imports money.ts only, never db or auth.",
-        "path": "src/components/expense-form.tsx",
-        "why": "Interactive split inputs and live summary need a Client Component."
-      },
-      {
-        "action": "create",
-        "change": "Server-rendered newest-first rows (description, formatMinor amount in tabular mono span, payers, date, category chip) with the no-expenses-yet empty state and inline error keeping filters.",
-        "path": "src/components/expense-list.tsx",
-        "why": "Presentational list body."
-      },
-      {
-        "action": "create",
-        "change": "Server Component list page with membership-checked reads and skeleton/error states.",
-        "path": "src/app/(app)/groups/[id]/expenses/page.tsx",
-        "why": "Expenses screen."
-      },
-      {
-        "action": "create",
-        "change": "Server Component rendering ExpenseForm with the group currency and active members in canonical order.",
-        "path": "src/app/(app)/groups/[id]/expenses/new/page.tsx",
-        "why": "New-expense screen."
-      },
-      {
-        "action": "create",
-        "change": "Five skeleton rows at list-row height matching the real row shape.",
-        "path": "src/app/(app)/groups/[id]/expenses/loading.tsx",
-        "why": "Every reachable loading state is designed."
-      },
-      {
-        "action": "edit",
-        "change": "Add Add expense and Expenses links to the action row and the expense.added describe() sentence; the exhaustive Record forces the sentence at compile time.",
-        "path": "src/components/group-overview.tsx",
-        "why": "Links reserved for #6; missing kind is a compile error by design."
-      }
-    ],
-    "issue": 6,
-    "kind": "feature",
-    "mode": "committed",
-    "out_of_scope": [
-      "IAC-11 (filters/search half): member and category filters, description search, their composition and the 'no expenses match these filters' state ship in piece 8 per the issue's out-of-scope; this piece renders only the 'no expenses yet' empty state.",
-      "Editing or deleting an expense — piece 5, which reads back the rule rows and positions stored here.",
-      "Balances, simplified debts and payments — pieces 6 and 7; balances keep rendering the zero literals and the settled sentence until then.",
-      "Activity feed screens — piece 8; expense.added rows carry subject and detail now so those screens can read them later."
-    ],
-    "qa_script": [
-      "Sign up, create a group with three members, open /groups/[id]/expenses and record one expense of each split type including a two-payer expense; confirm the list is newest-first with payers, dates and category chips.",
-      "At 360px using keyboard only, submit an invalid exact-amount split and confirm focus lands on the first invalid field with every typed value kept and the shortfall named in minor units.",
-      "Uncheck every participant and submit; confirm a picker-beside error and nothing written. As a second signed-in non-member, open the group URL and confirm 404 with no data."
-    ],
-    "residual_risks": [
-      "Two tabs submitting at once and the back button onto a submitted form have no dedicated test; Save disables while pending, which covers the double-click but not the race.",
-      "Emoji, RTL and ceiling-length descriptions in truncating rows are validated for shape (non-empty, length cap) but their visual truncation is QA-only.",
-      "The overview recent-activity block will show an amount-less 'added an expense' line until the feed screens of piece 8 render subject/detail.",
-      "Balances stay zero literals with the settled sentence until pieces 6 and 7; a group with expenses still reads 'Everyone's square in this group.'",
-      "The Neon production path is covered by tests plus a human preview check, not by CI; a hand-edited migration missing breakpoint markers fails on both backends, so the .sql must be generator output."
-    ],
-    "risks": [
-      "No frozen doc (docs/prd.md, docs/trd.md, docs/ui.md) and no framework path (.github/**, .sdlc/**) is touched; the schema additions implement the already-approved TRD data model rather than revising it.",
-      "conventions.md promises an eslint rule that a money value is never typed as number, which does not exist; this piece proves number-exclusion with a tsc probe instead and leaves the lint rule for its own ticket.",
-      "The new enum and four tables ship to Neon on the next production boot through migrate.ts; only generator-produced SQL with breakpoint markers is acceptable."
-    ],
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "parseMajorUnits JPY/BHD round-trips and rejects excess fraction digits, separators and signs",
-          "1-unit/3-way and 7-unit/4-way remainder names the exact first-payer recipient; single participant takes all",
-          "10,000-case property tests for sum invariant and recipient; tsc @ts-expect-error probe for number-to-money"
-        ],
-        "path": "tests/lib/money.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "two-payer success and mismatch/dup-payer typed refusals; payer outside the split accepted",
-          "non-member createExpense writes nothing; exact/percentage shortfalls name minor units with tables unchanged",
-          "zero-participant picker error; rule rows round-trip with canonical positions; exactly one activity entry and none on forced failure",
-          "zero/negative/whitespace inputs rejected; stale-member submit refused; category round-trips and null stays null"
-        ],
-        "path": "tests/integration/expenses.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "split-type control swaps inputs without navigating; live summary states the shortfall",
-          "failed submit focuses the first invalid field and keeps every value",
-          "payer-sum line updates as payer amounts are edited"
-        ],
-        "path": "tests/components/expense-form.test.tsx"
-      },
-      {
-        "action": "edit",
-        "cases": [
-          "fresh PGlite schema includes the four expense tables, both enums and the activity subject/detail columns"
-        ],
-        "path": "tests/integration/migrations.test.ts"
-      }
-    ],
-    "understanding": "Issue #6 builds expense recording: a one-pass form (description, amount, date, optional category and note, one-or-several payers, four split types) plus a newest-first list, backed by the expenses, expense_payer, expense_share and expense_split_input tables and the parse/split core in money.ts. The binding brief decisions require storing the entered rule beside the produced shares from the first expense, with balances reading only payer/share rows; creation only — edit/delete (piece 5), filters/search/feed (piece 8) and balances/payments (pieces 6-7) are out.",
-    "unknowns": [
-      "Whether QA's seeded currencies include a zero- or three-fraction-digit case to exercise the JPY/BHD parse paths in the browser (unit tests cover the logic regardless).",
-      "Whether the QA timing rig can complete the one-pass flow under 60 seconds on the seeded group at 360px; the form is one screen with defaults favouring speed."
-    ],
-    "version": 1
-  },
-  "approved_too_high": false
+  "approved_too_high": false,
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-10-02T19:07:39.659Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5959535690"
 }
