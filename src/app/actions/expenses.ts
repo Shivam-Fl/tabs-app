@@ -34,6 +34,15 @@ export interface ExpenseResult {
 const MAX_DESCRIPTION = 200;
 const MAX_NOTE = 500;
 
+/**
+ * The largest value the int8 columns hold: amount_minor on expenses and on expense_payer, and
+ * input_value on expense_split_input. parseMajorUnits reads anything — it builds the whole part
+ * with BigInt rather than a float — so without this bound an oversized figure reaches the insert
+ * and Postgres raises out-of-range, which the form sees as an uncaught 500 instead of a sentence
+ * beside the field that caused it.
+ */
+const MAX_INT8 = 9223372036854775807n;
+
 const rawSchema = z.object({
   groupId: z.string(),
   description: z.string(),
@@ -171,6 +180,7 @@ export async function createExpense(
     const amount = parseMajorUnits(raw.data.amount, group.currency);
     if (!amount.ok) fieldErrors.amount = amount.message;
     else if (amount.minor <= 0n) fieldErrors.amount = 'Enter an amount greater than zero.';
+    else if (amount.minor > MAX_INT8) fieldErrors.amount = 'That amount is too large to record.';
 
     const category: ExpenseCategory | null =
       raw.data.category === '' ? null : (raw.data.category as ExpenseCategory);
@@ -231,6 +241,12 @@ export async function createExpense(
           fieldErrors.payers = `Enter what ${nameOf(memberId)} paid.`;
           break;
         }
+        // Read before the sum is taken: a part that cannot be stored is not a part, so the
+        // refusal is about that payer rather than about the total being over-paid.
+        if (paid.minor > MAX_INT8) {
+          fieldErrors.payers = `${nameOf(memberId)}'s part is too large to record.`;
+          break;
+        }
         payers.push({ memberId, amountMinor: paid.minor });
         sum += paid.minor;
       }
@@ -249,6 +265,13 @@ export async function createExpense(
       const parsed = parseMemberInput(splitType.data, inputs[member.memberId] ?? '', group.currency);
       if (!parsed.ok) {
         fieldErrors[`input.${member.memberId}`] ??= parsed.message;
+        return { memberId: member.memberId, value: 0n };
+      }
+      // Only an exact input is money in minor units, held in input_value exactly as it was
+      // typed, so it carries the same bound as the total and the payer parts. A percentage or a
+      // share count is a weight, not an amount.
+      if (splitType.data === 'exact' && parsed.value > MAX_INT8) {
+        fieldErrors[`input.${member.memberId}`] ??= 'That amount is too large to record.';
         return { memberId: member.memberId, value: 0n };
       }
       return { memberId: member.memberId, value: parsed.value };
