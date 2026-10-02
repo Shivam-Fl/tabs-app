@@ -42,6 +42,29 @@ export type Log = (message: string) => void;
 
 export const REQUIRED_VARIABLES = ['DATABASE_URL', 'TABS_HMAC_KEY'] as const;
 
+/**
+ * How many trusted proxies append to `x-forwarded-for` before this app sees the request.
+ *
+ * OPTIONAL, and deliberately not in REQUIRED_VARIABLES: an unset value must not stop a
+ * deployment from booting, it must mean "nothing here is trusted" — see the source-address
+ * resolution in src/app/actions/auth.ts. A header is evidence of an address only when
+ * something the OPERATOR controls wrote it, and the count is how the operator says so.
+ *
+ * Read per call rather than memoised into config(), because it is read on the unauthenticated
+ * sign-in path and a test has to be able to change it around a single attempt.
+ */
+export const TRUSTED_PROXIES_VARIABLE = 'TABS_TRUSTED_PROXIES';
+
+export function trustedProxyCount(source: Source = process.env): number {
+  const raw = (source[TRUSTED_PROXIES_VARIABLE] ?? '').trim();
+  // Strict on purpose. parseInt reads '1.5' and '2 proxies' as 1 and 2, silently trusting
+  // FEWER hops than were written — which lands one entry further right, and that entry is the
+  // caller's. A count we cannot read exactly is a count we do not act on.
+  if (!/^\d+$/.test(raw)) return 0;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : 0;
+}
+
 export function loadEnv(source: Source, log: Log = () => {}): EnvConfig {
   const tabsEnv = source.TABS_ENV ?? '';
 

@@ -4,8 +4,8 @@ import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
 import { TestCookieStore, withRequest } from '../helpers/request';
-import type { Database } from '@/db/client';
-import { loginAttempts, sessions, users } from '@/db/schema';
+import { insertUser, type Database } from '@/db/client';
+import { loginAttempts, sessions } from '@/db/schema';
 import {
   ACCOUNT_LIMIT,
   SESSION_COOKIE,
@@ -38,27 +38,24 @@ afterAll(async () => {
 });
 
 async function seedUser(): Promise<string> {
-  const [user] = await db
-    .insert(users)
-    .values({
-      email: `user-${Math.random().toString(36).slice(2)}@example.invalid`,
-      passwordHash: hashPassword('a password'),
-      displayName: 'A User',
-      defaultCurrency: 'USD',
-    })
-    .returning({ id: users.id });
-  return user.id;
+  const id = await insertUser(db, {
+    email: `user-${Math.random().toString(36).slice(2)}@example.invalid`,
+    passwordHash: await hashPassword('a password'),
+    displayName: 'A User',
+    defaultCurrency: 'USD',
+  });
+  return id as string;
 }
 
 describe('password hashing', () => {
-  it('round-trips and rejects a wrong password', () => {
-    const stored = hashPassword('correct horse battery staple');
-    expect(verifyPassword('correct horse battery staple', stored)).toBe(true);
-    expect(verifyPassword('Correct horse battery staple', stored)).toBe(false);
+  it('round-trips and rejects a wrong password', async () => {
+    const stored = await hashPassword('correct horse battery staple');
+    expect(await verifyPassword('correct horse battery staple', stored)).toBe(true);
+    expect(await verifyPassword('Correct horse battery staple', stored)).toBe(false);
   });
 
-  it('stores the parameters, a 16-byte salt and the digest, and no plaintext', () => {
-    const stored = hashPassword('a memorable password');
+  it('stores the parameters, a 16-byte salt and the digest, and no plaintext', async () => {
+    const stored = await hashPassword('a memorable password');
     const [scheme, n, r, p, salt, digest] = stored.split('$');
 
     expect(scheme).toBe('scrypt');
@@ -70,13 +67,28 @@ describe('password hashing', () => {
     expect(stored).not.toContain('a memorable password');
   });
 
-  it('salts: the same password hashes differently every time', () => {
-    expect(hashPassword('same')).not.toBe(hashPassword('same'));
+  it('salts: the same password hashes differently every time', async () => {
+    expect(await hashPassword('same')).not.toBe(await hashPassword('same'));
   });
 
-  it('refuses a stored string that is not a scrypt hash', () => {
-    expect(verifyPassword('anything', 'not-a-hash')).toBe(false);
+  it('refuses a stored string that is not a scrypt hash', async () => {
+    expect(await verifyPassword('anything', 'not-a-hash')).toBe(false);
   });
+
+  it('leaves the event loop alone while it works, rather than blocking it', async () => {
+    // The reason the async entry point exists. A scryptSync at these parameters holds the main
+    // thread for roughly 360 ms, so a timer due in 20 ms cannot run until the hash is already
+    // finished — the order below is the difference between a suspended request and a stalled
+    // server. Merely checking the timer eventually fired would pass either way: a timer that
+    // came due during a sync block still fires afterwards.
+    const order: string[] = [];
+    setTimeout(() => order.push('timer'), 20);
+    await hashPassword('a password');
+    order.push('hash-returned');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(order).toEqual(['timer', 'hash-returned']);
+  }, 30_000);
 });
 
 describe('sessions', () => {

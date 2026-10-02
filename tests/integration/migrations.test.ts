@@ -1,8 +1,9 @@
 import { sql } from 'drizzle-orm';
-import { afterAll, describe, expect, it } from 'vitest';
+import { Pool } from '@neondatabase/serverless';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 
 import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
-import { createDatabase, setDatabase } from '@/db/client';
+import { createDatabase, isPgliteSession, setDatabase, withPinnedSession } from '@/db/client';
 import { loadMigrations, migrate, statementsOf, type Migration } from '@/db/migrate';
 
 afterAll(async () => {
@@ -108,10 +109,60 @@ describe('the migration files themselves', () => {
 });
 
 describe('the client seam', () => {
+  // A connection string the driver rejects before it opens a socket: these cases are about
+  // WHICH driver the session was built from, and none of them should reach a network.
+  const unreachable = 'not-a-connection-string';
+
   it('createDatabase takes the driver as an argument, so no test has to mock this file', async () => {
     const db = await useTestDatabase();
     expect(typeof db.select).toBe('function');
     expect(typeof createDatabase).toBe('function');
     expect(typeof setDatabase).toBe('function');
+  });
+
+  it('builds the session the tag names, for each driver', async () => {
+    // The regression for mistaking a Neon Pool for PGlite. Both have a `query` method — the
+    // Pool inherits one — so a structural guess identified every Neon session as PGlite, and
+    // every query and transaction on the DATABASE_URL path then threw at the first round trip.
+    const pglite = await useTestDatabase();
+    const neon = createDatabase({ kind: 'neon', pool: new Pool({ connectionString: unreachable }) });
+
+    expect(isPgliteSession(pglite)).toBe(true);
+    expect(isPgliteSession(neon)).toBe(false);
+  });
+
+  it('a Neon session fails on the CONNECTION, not on the shape of the driver', async () => {
+    const db = createDatabase({ kind: 'neon', pool: new Pool({ connectionString: unreachable }) });
+    const failure = await db.execute(sql`SELECT 1`).then(
+      () => null,
+      (error: Error) => error.message,
+    );
+
+    expect(failure).not.toBeNull();
+    // The PGlite session calls query() with PGlite's three-argument shape, which this driver
+    // rejects as "n is not a function" before it ever looks at the connection string.
+    expect(failure).not.toMatch(/is not a function/);
+  });
+
+  it('takes ONE connection for the migrator rather than borrowing one per statement', async () => {
+    // A Postgres advisory lock is session-scoped, and Pool.query() takes a client from the
+    // pool and returns it the moment that one statement finishes — so a lock taken that way
+    // spans nothing, and the connection it leaked back into the pool still holds it.
+    const pool = new Pool({ connectionString: unreachable });
+    const connect = vi.spyOn(pool, 'connect');
+    const db = createDatabase({ kind: 'neon', pool });
+
+    await expect(withPinnedSession(db, () => Promise.resolve('unreachable'))).rejects.toThrow();
+    expect(connect).toHaveBeenCalledTimes(1);
+  });
+
+  it('a PGlite instance is already one connection, so pinning it is the identity', async () => {
+    const db = await useTestDatabase();
+    let pinned: unknown;
+    await withPinnedSession(db, (session) => {
+      pinned = session;
+      return Promise.resolve();
+    });
+    expect(pinned).toBe(db);
   });
 });

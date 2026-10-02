@@ -4,8 +4,9 @@ import { eq } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 import { z } from 'zod';
 
-import { database } from '@/db/client';
+import { database, insertUser } from '@/db/client';
 import { users } from '@/db/schema';
+import { trustedProxyCount } from '@/lib/env';
 import {
   GENERIC_AUTH_ERROR,
   checkRateLimit,
@@ -42,7 +43,7 @@ export interface AuthResult {
 
 /**
  * Bounds that are not decoration. keyFor HMACs the whole email and the column is unbounded
- * text; scryptSync runs over the whole password, so an unbounded body would spend the quarter
+ * text; scrypt runs over the whole password, so an unbounded body would spend the third of a
  * second per attempt the source limiter exists to ration.
  */
 const emailSchema = z
@@ -79,20 +80,43 @@ function fieldErrorsFrom(error: z.ZodError): AuthFieldErrors {
  * not faster than a wrong password and the response time carries no hint that the account
  * does not exist. Derived once per process from a random password nobody holds.
  */
-let decoyHash: string | undefined;
-function decoy(): string {
+let decoyHash: Promise<string> | undefined;
+function decoy(): Promise<string> {
   decoyHash ??= hashPassword(`decoy-${Math.random().toString(36).slice(2)}`);
   return decoyHash;
 }
 
 /**
- * The address the request came from, or null. Headers are the only evidence a Server Action
- * has: it takes no Headers argument. x-forwarded-for wins because that is what a proxy sets,
- * and the first entry is the originating client rather than the nearest hop.
+ * The address the request came from, or null.
+ *
+ * Headers are the only evidence a Server Action has of it — it takes no Headers argument — and
+ * they are also the least trustworthy thing in the request. `x-forwarded-for` is a plain
+ * header: a caller can send any value, including the first entry, which is the one a naive
+ * reading takes. Keying a security control on that lets one flood buy a fresh empty bucket per
+ * request, which is the limit refusing to limit.
+ *
+ * So nothing in the header is trusted until an operator declares how many proxies append to
+ * it. With TABS_TRUSTED_PROXIES=n the address is the n-th entry from the right — the one the
+ * nearest trusted hop saw — and a chain shorter than n means no trusted hop appended, so
+ * there is nothing to trust. Unset — the default, and every local and CI boot — therefore
+ * leaves the address undetermined.
+ *
+ * That is the weaker failure on purpose: the source bucket does not apply, rather than
+ * applying to whatever the caller last typed. AC-7's exemption for an undetermined address is
+ * what a deployment without a declared proxy gets, and the account limit still speaks.
  */
-async function sourceAddressOfRequest(): Promise<string | null> {
-  const headers = await requestHeaders();
-  return headers.get('x-forwarded-for')?.split(',')[0]?.trim() || headers.get('x-real-ip')?.trim() || null;
+function sourceAddressOf(headers: Headers): string | null {
+  const trusted = trustedProxyCount();
+  if (trusted < 1) return null;
+
+  const chain = (headers.get('x-forwarded-for') ?? '')
+    .split(',')
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  if (chain.length >= trusted) return chain[chain.length - trusted] ?? null;
+
+  // A proxy that REPLACES the header rather than appending to it leaves no chain to walk.
+  return headers.get('x-real-ip')?.trim() || null;
 }
 
 export async function signUp(_previous: AuthResult | null, formData: FormData): Promise<AuthResult> {
@@ -113,23 +137,19 @@ export async function signUp(_previous: AuthResult | null, formData: FormData): 
     return { ok: false, fieldErrors: { email: 'An account with that email already exists.' } };
   }
 
-  const passwordHash = hashPassword(password);
+  const passwordHash = await hashPassword(password);
 
-  const created = await db.transaction(async (tx) => {
-    const inserted = await tx
-      .insert(users)
-      .values({ email, passwordHash, displayName, defaultCurrency: 'USD' })
-      .onConflictDoNothing({ target: users.email })
-      .returning({ id: users.id });
-    return inserted[0] ?? null;
-  });
+  // One statement, so one statement's atomicity: there is no read and write here to make
+  // atomic together. What decides a duplicate is the unique constraint, and this is the
+  // insert that asks it.
+  const createdId = await insertUser(db, { email, passwordHash, displayName, defaultCurrency: 'USD' });
 
-  if (!created) {
+  if (!createdId) {
     // The concurrent case: the other request won the unique constraint.
     return { ok: false, fieldErrors: { email: 'An account with that email already exists.' } };
   }
 
-  await createSession(created.id);
+  await createSession(createdId);
   return { ok: true, redirectTo: '/' };
 }
 
@@ -156,9 +176,9 @@ export async function signIn(_previous: AuthResult | null, formData: FormData): 
   const db = await database();
 
   // Null means no address could be determined, which is what happens on every loopback boot:
-  // there is no proxy in front of the app to set one, and the source bucket must not become a
-  // bucket shared by every visitor of a deployment.
-  const address = await sourceAddressOfRequest();
+  // nothing there declares a trusted proxy, and the source bucket must not become a bucket
+  // shared by every visitor of a deployment.
+  const address = sourceAddressOf(await requestHeaders());
 
   const verdict = await checkRateLimit(email, address);
 
@@ -167,7 +187,7 @@ export async function signIn(_previous: AuthResult | null, formData: FormData): 
   }
 
   const user = (await db.select().from(users).where(eq(users.email, email)).limit(1))[0];
-  const valid = verifyPassword(password, user ? user.passwordHash : decoy());
+  const valid = await verifyPassword(password, user ? user.passwordHash : await decoy());
 
   if (!valid || !user) {
     // Already at the limit, so the seventh wrong attempt inside the window records nothing

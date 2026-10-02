@@ -20,7 +20,12 @@ export const users = pgTable('users', {
   // A currency code, not money. A group's column will copy this at creation.
   defaultCurrency: varchar('default_currency', { length: 3 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  // $onUpdate rather than a column the action has to remember: defaultNow() alone writes it
+  // once at insert and never again, so every profile edit would leave it at the creation time.
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow()
+    .$onUpdate(() => new Date()),
 });
 
 export const sessions = pgTable(

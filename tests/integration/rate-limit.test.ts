@@ -5,6 +5,7 @@ import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
 import { TestCookieStore, form, withRequest } from '../helpers/request';
 import type { Database } from '@/db/client';
 import { loginAttempts, users } from '@/db/schema';
+import { TRUSTED_PROXIES_VARIABLE } from '@/lib/env';
 import { signIn, signUp } from '@/app/actions/auth';
 import {
   ACCOUNT_LIMIT,
@@ -42,6 +43,23 @@ async function attempt(email: string, password: string, headers: Record<string, 
 /** Only the rows both predicates count: TR-11's subject is failed sign-ins. */
 const failureRowsFor = async (email: string) =>
   (await db.select().from(loginAttempts).where(eq(loginAttempts.keyHash, keyFor(email)))).filter((row) => !row.succeeded);
+
+/**
+ * Runs `body` with TABS_TRUSTED_PROXIES set — or, at 0, explicitly not set. Nothing in the
+ * header is trusted unless an operator declares how many proxies append to it, so this is how
+ * a test says "there is one trusted edge in front of this app" and how it says "there is not".
+ */
+async function behindProxies<T>(hops: number, body: () => Promise<T>): Promise<T> {
+  const previous = process.env[TRUSTED_PROXIES_VARIABLE];
+  if (hops > 0) process.env[TRUSTED_PROXIES_VARIABLE] = String(hops);
+  else delete process.env[TRUSTED_PROXIES_VARIABLE];
+  try {
+    return await body();
+  } finally {
+    if (previous === undefined) delete process.env[TRUSTED_PROXIES_VARIABLE];
+    else process.env[TRUSTED_PROXIES_VARIABLE] = previous;
+  }
+}
 
 describe('the account limit', () => {
   const email = 'qa1@example.invalid';
@@ -99,12 +117,79 @@ describe('the source limit', () => {
     }
 
     const spy = vi.spyOn(await import('@/lib/auth'), 'verifyPassword');
-    const result = await attempt('victim@example.invalid', 'whatever', { 'x-forwarded-for': '203.0.113.7' });
+    const result = await behindProxies(1, () =>
+      attempt('victim@example.invalid', 'whatever', { 'x-forwarded-for': '203.0.113.7' }),
+    );
 
     // Refused without the password ever being compared — the whole reason this limit exists.
     expect(result).toEqual({ ok: false, formError: GENERIC_AUTH_ERROR });
     expect(spy).not.toHaveBeenCalled();
   });
+
+  it('rotating the caller-supplied part of the chain buys no fresh bucket', async () => {
+    // The limit exists to ration scrypt, so keying it on something the caller sends makes it
+    // switchable: a flood that varies what it claims to be gets an empty bucket every time and
+    // buys an unbounded number of full password comparisons.
+    for (let attemptNumber = 1; attemptNumber <= SOURCE_LIMIT; attemptNumber += 1) {
+      await recordAttempt(`flood-${attemptNumber}@example.invalid`, '70.41.3.18', false);
+    }
+
+    const spy = vi.spyOn(await import('@/lib/auth'), 'verifyPassword');
+    // One trusted edge, so the address is the LAST entry: the one the edge saw. The leading
+    // entries are whatever the caller put there, and changing them changes nothing.
+    const attempts = await behindProxies(1, async () => {
+      const seen = [];
+      for (let attemptNumber = 1; attemptNumber <= SOURCE_LIMIT; attemptNumber += 1) {
+        seen.push(await attempt('victim@example.invalid', 'whatever', {
+          'x-forwarded-for': `198.51.100.${attemptNumber}, 70.41.3.18`,
+        }));
+      }
+      return seen;
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+    for (const result of attempts) expect(result).toEqual({ ok: false, formError: GENERIC_AUTH_ERROR });
+  }, 120_000);
+
+  it('a chain shorter than the declared proxy count says nothing, so the address stays undetermined', async () => {
+    for (let attemptNumber = 1; attemptNumber <= SOURCE_LIMIT; attemptNumber += 1) {
+      await recordAttempt(`flood-${attemptNumber}@example.invalid`, '198.51.100.1', false);
+    }
+
+    // Two proxies are declared but the chain carries one entry, so nothing in it was written
+    // by a trusted hop — and the entry the caller did send is exactly what must not be read.
+    const result = await behindProxies(2, () =>
+      attempt('victim@example.invalid', 'whatever', { 'x-forwarded-for': '198.51.100.1' }),
+    );
+
+    expect(result).toEqual({ ok: false, formError: GENERIC_AUTH_ERROR });
+    const recorded = await db
+      .select()
+      .from(loginAttempts)
+      .where(eq(loginAttempts.keyHash, keyFor('victim@example.invalid')));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sourceHash).toBe('');
+  }, 60_000);
+
+  it('trusts no header at all until an operator declares a proxy', async () => {
+    for (let attemptNumber = 1; attemptNumber <= SOURCE_LIMIT; attemptNumber += 1) {
+      await recordAttempt(`flood-${attemptNumber}@example.invalid`, '203.0.113.7', false);
+    }
+
+    // Nothing declared, nothing trusted — so a caller cannot opt itself back into the bucket it
+    // is trying to escape by sending a header, and cannot refill it either.
+    const result = await behindProxies(0, () =>
+      attempt('victim@example.invalid', 'whatever', { 'x-forwarded-for': '203.0.113.7' }),
+    );
+
+    const recorded = await db
+      .select()
+      .from(loginAttempts)
+      .where(eq(loginAttempts.keyHash, keyFor('victim@example.invalid')));
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]?.sourceHash).toBe('');
+    expect(result.formError).toBe(GENERIC_AUTH_ERROR);
+  }, 60_000);
 
   it('a request whose source address cannot be determined is exempt from that bucket', async () => {
     await createAccount('exempt@example.invalid');

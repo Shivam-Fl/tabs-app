@@ -30,7 +30,7 @@ if (tabsEnv !== undefined && tabsEnv !== 'local') {
   process.exit(1);
 }
 
-const url = process.env.TABS_SEED_HEALTH_URL ?? 'http://localhost:3000/api/health';
+const url = 'http://localhost:3000/api/health';
 
 let response;
 try {

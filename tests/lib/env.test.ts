@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { LOCAL_HMAC_KEY, REQUIRED_VARIABLES, loadEnv } from '@/lib/env';
+import { LOCAL_HMAC_KEY, REQUIRED_VARIABLES, TRUSTED_PROXIES_VARIABLE, loadEnv, trustedProxyCount } from '@/lib/env';
 
 describe('loadEnv', () => {
   it('substitutes the documented local defaults and names each in its log line', () => {
@@ -50,6 +50,24 @@ describe('loadEnv', () => {
     expect(LOCAL_HMAC_KEY).toMatch(/dev/i);
     // Not something a deployment would ever ship unchanged.
     expect(LOCAL_HMAC_KEY).not.toMatch(/^[a-f0-9]{32,}$/);
+  });
+
+  it('declares no trusted proxy unless an operator says so', () => {
+    // Nothing in the header is evidence of an address until the operator names the hops, and
+    // this must not be a REQUIRED_VARIABLE: absent means "trust nothing", not "refuse to boot".
+    expect(REQUIRED_VARIABLES).not.toContain(TRUSTED_PROXIES_VARIABLE);
+
+    expect(trustedProxyCount({})).toBe(0);
+    expect(trustedProxyCount({ TABS_ENV: 'local' })).toBe(0);
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: '2' })).toBe(2);
+  });
+
+  it('reads a nonsense hop count as none, rather than as a number to walk a chain with', () => {
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: '' })).toBe(0);
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: '  ' })).toBe(0);
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: 'one' })).toBe(0);
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: '-1' })).toBe(0);
+    expect(trustedProxyCount({ [TRUSTED_PROXIES_VARIABLE]: '1.5' })).toBe(0);
   });
 
   it('importing the module does not throw, whatever NODE_ENV says', () => {

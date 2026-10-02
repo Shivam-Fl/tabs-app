@@ -1,4 +1,4 @@
-import { createHmac, randomBytes, scryptSync, timingSafeEqual, createHash } from 'node:crypto';
+import { createHmac, randomBytes, scrypt, timingSafeEqual, createHash, type ScryptOptions } from 'node:crypto';
 import { and, eq, gt, lt, sql } from 'drizzle-orm';
 import { redirect } from 'next/navigation';
 
@@ -54,17 +54,33 @@ export interface SessionUser {
  * behind Argon2id and Node ships it in crypto, so a slow salted hash costs no dependency and
  * no install step — the one dependency class this CI cannot install safely.
  *
+ * The ASYNC entry point, deliberately. These parameters cost about 360 ms of CPU, and
+ * scryptSync spends that on the main thread of the one process serving every request: one
+ * sign-in attempt stalls the health poll and everybody else's alongside it. crypto.scrypt
+ * runs the same work on the thread pool, so the request is suspended rather than the server.
+ *
  * Stored as `scrypt$N$r$p$salt$hash`, so the parameters travel with the hash and raising N
  * later does not invalidate the existing ones.
  */
-export function hashPassword(password: string): string {
-  const salt = randomBytes(SALT_BYTES);
-  const derived = scryptSync(password, salt, KEY_LENGTH, {
-    N: SCRYPT_N,
-    r: SCRYPT_R,
-    p: SCRYPT_P,
-    maxmem: SCRYPT_MAXMEM,
+const SCRYPT_OPTIONS: ScryptOptions = {
+  N: SCRYPT_N,
+  r: SCRYPT_R,
+  p: SCRYPT_P,
+  maxmem: SCRYPT_MAXMEM,
+};
+
+function deriveKey(password: string, salt: Buffer, keyLength: number, options: ScryptOptions): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scrypt(password, salt, keyLength, options, (error, derived) => {
+      if (error) reject(error);
+      else resolve(derived);
+    });
   });
+}
+
+export async function hashPassword(password: string): Promise<string> {
+  const salt = randomBytes(SALT_BYTES);
+  const derived = await deriveKey(password, salt, KEY_LENGTH, SCRYPT_OPTIONS);
   return [
     'scrypt',
     SCRYPT_N,
@@ -75,7 +91,7 @@ export function hashPassword(password: string): string {
   ].join('$');
 }
 
-export function verifyPassword(password: string, stored: string): boolean {
+export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const parts = stored.split('$');
   if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
 
@@ -83,7 +99,7 @@ export function verifyPassword(password: string, stored: string): boolean {
   const expected = Buffer.from(digest, 'base64');
   let derived: Buffer;
   try {
-    derived = scryptSync(password, Buffer.from(salt, 'base64'), expected.length, {
+    derived = await deriveKey(password, Buffer.from(salt, 'base64'), expected.length, {
       N: Number(n),
       r: Number(r),
       p: Number(p),

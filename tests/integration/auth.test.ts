@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
@@ -161,6 +161,26 @@ describe('the profile', () => {
     expect(row?.defaultCurrency).toBe('USD');
   }, 60_000);
 
+  it('moves updated_at on a profile save, rather than leaving it at the creation time', async () => {
+    // defaultNow() alone writes the column once at insert, so every later edit left it stale —
+    // invisible today because no screen shows it, and inherited by anything that sorts or
+    // exports by "last updated".
+    const cookies = await signUpAs('updated@example.invalid');
+    const [created] = await db.select().from(users).where(eq(users.email, 'updated@example.invalid'));
+
+    // Backdate it, so a stale column cannot pass by accident on a fast machine.
+    await db.execute(sql`UPDATE users SET updated_at = now() - interval '1 day' WHERE email = ${'updated@example.invalid'}`);
+    const [before] = await db.select().from(users).where(eq(users.email, 'updated@example.invalid'));
+
+    await withRequest(cookies, () =>
+      updateProfile(null, form({ displayName: 'Renamed Later', defaultCurrency: 'usd' })),
+    ).then((result) => expect(result).toEqual({ ok: true }));
+
+    const [after] = await db.select().from(users).where(eq(users.email, 'updated@example.invalid'));
+    expect(after?.updatedAt.getTime()).toBeGreaterThan(before?.updatedAt.getTime() ?? 0);
+    expect(created?.id).toBe(after?.id);
+  }, 60_000);
+
   it("refuses 'EURO' and 'US$' with a field error and changes nothing — no silent truncation", async () => {
     const cookies = await signUpAs('currency@example.invalid');
     const before = await db.select().from(users);
@@ -192,7 +212,7 @@ describe('the profile', () => {
     const theirsEmail = 'theirs@example.invalid';
     await db.insert(users).values({
       email: theirsEmail,
-      passwordHash: hashPassword(PASSWORD),
+      passwordHash: await hashPassword(PASSWORD),
       displayName: 'Theirs',
       defaultCurrency: 'GBP',
     });

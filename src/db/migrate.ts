@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { sql } from 'drizzle-orm';
 
-import type { Database } from './client';
+import { withPinnedSession, type Database } from './client';
 
 /**
  * Applies the generated migration list to whichever database is configured, behind a lock,
@@ -64,36 +64,46 @@ export function loadMigrations(directory = join(process.cwd(), 'drizzle')): Migr
  *
  * The applied set is read INSIDE the lock. Reading it before taking the lock is the specific
  * bug that lets two cold starts each decide a migration is pending.
+ *
+ * The whole body runs on ONE pinned connection (withPinnedSession), because a Postgres
+ * advisory lock is SESSION-scoped: a lock taken through Pool.query() belongs to whichever
+ * client the pool handed out and is gone by the next statement, so the lock would span the
+ * critical section only for as long as the pool happens to reuse one idle client — and a
+ * session returned to the pool still holding it deadlocks the next cold start.
  */
 export async function migrate(db: Database, migrations: Migration[]): Promise<number> {
-  // migrate.ts's own bookkeeping, created here rather than in schema.ts: a first boot on an
-  // empty database has no such table to read, and the read is what would throw.
-  await db.execute(sql`CREATE TABLE IF NOT EXISTS tabs_migrations (
+  return await withPinnedSession(db, async (session) => {
+    // migrate.ts's own bookkeeping, created here rather than in schema.ts: a first boot on an
+    // empty database has no such table to read, and the read is what would throw.
+    await session.execute(sql`CREATE TABLE IF NOT EXISTS tabs_migrations (
     "tag" text PRIMARY KEY,
     "applied_at" timestamptz NOT NULL DEFAULT now()
   )`);
 
-  await db.execute(sql`SELECT pg_advisory_lock(hashtext(${LOCK_KEY}))`);
-  try {
-    const applied = new Set(
-      (await db.execute<{ tag: string }>(sql`SELECT "tag" FROM tabs_migrations`)).rows.map((row) => row.tag),
-    );
-    const pending = migrations.filter((migration) => !applied.has(migration.tag));
-    if (pending.length === 0) return 0;
+    await session.execute(sql`SELECT pg_advisory_lock(hashtext(${LOCK_KEY}))`);
+    try {
+      const applied = new Set(
+        (await session.execute<{ tag: string }>(sql`SELECT "tag" FROM tabs_migrations`)).rows.map((row) => row.tag),
+      );
+      const pending = migrations.filter((migration) => !applied.has(migration.tag));
+      if (pending.length === 0) return 0;
 
-    for (const migration of pending) {
-      await db.transaction(async (tx) => {
-        // Split on drizzle-kit's statement breakpoints: PGlite's query and the Neon Pool's
-        // both take one statement at a time, and a whole file sent as one string is how a
-        // migration that worked in development fails on boot.
-        for (const statement of statementsOf(migration.sql)) {
-          await tx.execute(sql.raw(statement));
-        }
-        await tx.execute(sql`INSERT INTO tabs_migrations ("tag") VALUES (${migration.tag})`);
-      });
+      for (const migration of pending) {
+        // Drizzle only opens its own transaction client when the session's is a Pool; a
+        // pinned connection is not one, so this runs on the session holding the lock.
+        await session.transaction(async (tx) => {
+          // Split on drizzle-kit's statement breakpoints: PGlite's query and the Neon Pool's
+          // both take one statement at a time, and a whole file sent as one string is how a
+          // migration that worked in development fails on boot.
+          for (const statement of statementsOf(migration.sql)) {
+            await tx.execute(sql.raw(statement));
+          }
+          await tx.execute(sql`INSERT INTO tabs_migrations ("tag") VALUES (${migration.tag})`);
+        });
+      }
+      return pending.length;
+    } finally {
+      await session.execute(sql`SELECT pg_advisory_unlock(hashtext(${LOCK_KEY}))`);
     }
-    return pending.length;
-  } finally {
-    await db.execute(sql`SELECT pg_advisory_unlock(hashtext(${LOCK_KEY}))`);
-  }
+  });
 }
