@@ -1,8 +1,9 @@
 import Link from 'next/link';
 
-import type { ActivityRow, GroupRow, MemberRow } from '@/lib/access';
+import type { ActivityRow, GroupRow } from '@/lib/access';
+import { SETTLED_MESSAGE, type NamedBalance, type Transfer } from '@/lib/balances';
 import { formatMinor } from '@/lib/money';
-import { LinkButton, Money } from '@/components/ui';
+import { LinkButton, Money, directionOf } from '@/components/ui';
 
 /**
  * The group overview's body.
@@ -18,12 +19,17 @@ import { LinkButton, Money } from '@/components/ui';
 export function GroupOverview({
   group,
   members,
+  transfers,
   entries,
 }: {
   group: GroupRow;
-  members: MemberRow[];
+  /** Every active member with their net, from the same read the balances screen uses. */
+  members: NamedBalance[];
+  /** The fewest transfers that settle those nets. Empty when everybody is square. */
+  transfers: Transfer[];
   entries: ActivityRow[];
 }) {
+  const nameOf = new Map(members.map((member) => [member.memberId, member.displayName]));
   return (
     <div className="flex flex-col gap-space-6">
       <header className="flex flex-col gap-space-1">
@@ -50,14 +56,40 @@ export function GroupOverview({
               className="flex min-h-[44px] items-center justify-between gap-space-3 border-b border-border py-space-3 last:border-b-0"
             >
               <span className="truncate">{member.displayName}</span>
-              {/* Every balance is zero in this piece, so the direction is always 'settled'. */}
-              <Money formatted={formatMinor(member.balanceMinor, group.currency)} direction="settled" />
+              {/* The direction is read off the figure rather than assumed: a zero here was a
+                  literal until this piece, and the whole point of the screen is that it is not. */}
+              <Money
+                formatted={formatMinor(member.balanceMinor, group.currency)}
+                direction={directionOf(member.balanceMinor)}
+                voice="person"
+              />
             </li>
           ))}
         </ul>
-        {/* Where the transfer list goes. docs/ui.md line 165 gives the sentence verbatim, with
-            an ASCII apostrophe — U+2019 fails CI rather than passing here and reading wrong. */}
-        <p className="text-base text-text-muted">Everyone&apos;s square in this group.</p>
+        {/* docs/ui.md's simplified-debts block. When there is nothing to settle the block says
+            so instead of listing nothing (TR-9) — the sentence verbatim from docs/ui.md line
+            165, with an ASCII apostrophe: U+2019 fails CI rather than passing here and reading
+            wrong. The same constant the balances screen renders, so the two cannot drift. */}
+        {transfers.length === 0 ? (
+          <p className="text-base text-text-muted">{SETTLED_MESSAGE}</p>
+        ) : (
+          <ul className="flex flex-col">
+            {transfers.map((transfer) => (
+              <li
+                key={`${transfer.fromMemberId}-${transfer.toMemberId}`}
+                className="flex min-h-[44px] items-center justify-between gap-space-3 border-b border-border py-space-3 last:border-b-0"
+              >
+                <span className="truncate">
+                  {nameOf.get(transfer.fromMemberId) ?? 'A member'} pays{' '}
+                  {nameOf.get(transfer.toMemberId) ?? 'a member'}
+                </span>
+                <span className="shrink-0 font-mono tabular-nums">
+                  {formatMinor(transfer.amountMinor, group.currency)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
       <section className="flex flex-col gap-space-2">
@@ -83,10 +115,16 @@ export function GroupOverview({
       </section>
 
       {/* docs/ui.md's secondary action row: Add expense is the primary action and the rest are
-          links. Balances and Activity join them with their own screens in #8 and #10; the
-          Expenses link is here because the list is otherwise reachable only through the form. */}
+          links. Activity joins them with its own screen in #10; the Expenses link is here
+          because the list is otherwise reachable only through the form. */}
       <nav aria-label="Group" className="flex flex-wrap gap-space-2">
         <LinkButton href={`/groups/${group.id}/expenses/new`}>Add expense</LinkButton>
+        <Link
+          href={`/groups/${group.id}/balances`}
+          className="inline-flex min-h-[44px] items-center rounded-radius border border-border bg-surface px-space-4 font-medium"
+        >
+          Balances
+        </Link>
         <Link
           href={`/groups/${group.id}/expenses`}
           className="inline-flex min-h-[44px] items-center rounded-radius border border-border bg-surface px-space-4 font-medium"

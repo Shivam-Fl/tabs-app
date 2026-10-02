@@ -5,6 +5,6 @@ export { EmptyState } from './empty-state';
 export { ErrorState } from './error-state';
 export { Field } from './field';
 export { Input } from './input';
-export { Money } from './money';
+export { DIRECTION, Money, directionOf, type Direction } from './money';
 export { Skeleton } from './skeleton';
 export { TopBar } from './top-bar';

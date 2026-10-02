@@ -160,11 +160,20 @@ describe('the ten primitives', () => {
     expect(screen.getByText(/clear the filters/i)).toBeInTheDocument();
   });
 
-  it('states a money direction in words, never as a bare minus sign', () => {
+  it('states a money direction in visible words, never as a bare minus sign', () => {
     const { container } = render(<Money formatted="-180.50" direction="owes" />);
     expect(container.textContent).toContain('you owe');
-    // The word is in the accessible text, so it is not colour-alone information.
-    expect(container.querySelector('.sr-only')?.textContent).toContain('you owe');
+    // VISIBLE, not sr-only. The direction used to be clipped to screen readers, which left the
+    // colour as the only signal a sighted reader had — the one thing "never colour alone"
+    // forbids. So the words are asserted to be an unclipped element in the tree.
+    const words = screen.getByText('you owe');
+    expect(words).toBeVisible();
+    expect(words).not.toHaveClass('sr-only');
+    // The two voices differ only in the pronoun: the same sign, said about somebody's row in a
+    // table of names, reads in the third person.
+    cleanup();
+    render(<Money formatted="₹420.00" direction="owed" voice="person" />);
+    expect(screen.getByText('is owed')).toBeVisible();
   });
 
   it('renders the empty, loading and error states as text — no spinner, no shimmer', () => {

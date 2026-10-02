@@ -17,6 +17,7 @@ import {
   type GroupType,
 } from '@/db/schema';
 import type { Tx } from '@/lib/activity';
+import { netBalances, type MemberLedger, type NamedBalance } from '@/lib/balances';
 
 /**
  * The authorisation boundary. Every read and every write of a group, of a membership or of a
@@ -77,11 +78,23 @@ export interface MemberRow {
    */
   isPlaceholder: boolean;
   /**
-   * Always zero in this piece: there are no expense or payment rows to sum, so a balance reads
-   * from a literal rather than from a computation over nothing. Piece 6 replaces the literal
-   * with the figure and this signature does not change.
+   * What this member paid minus what they were given, summed from expense_payer and
+   * expense_share alone (TR-4). Positive is a credit. Read through readNetByMember, so this is
+   * the same figure every other screen and the leave and remove guards see.
    */
   balanceMinor: bigint;
+}
+
+/** A group's balances as one caller sees them: their own row, and every active member's net. */
+export interface GroupBalances {
+  /**
+   * The caller's own membership row. The balances screen does not need it — every row is
+   * labelled with a name and reads in the third person — but the home screen does, because a
+   * transfer is only a line on the summary if the caller is one of its two ends.
+   */
+  viewerMemberId: string;
+  /** Every active member's net, in canonical member order. */
+  members: NamedBalance[];
 }
 
 /** A group's invite link, for a caller who is a member of it. Both fields are the group's own. */
@@ -246,12 +259,23 @@ export async function readGroup(session: Session, groupId: string, userId: strin
   return rows[0] ?? null;
 }
 
-/** The group's active members, owner first. Null for a caller who is not a member. */
-export async function readMembers(session: Session, groupId: string, userId: string): Promise<MemberRow[] | null> {
+/**
+ * The group's active members in the CANONICAL member order, with the name every screen shows.
+ *
+ * Canonical is not this module's invention: it is the order the expense form's participant
+ * picker renders and the order the split's remainder rule is defined against (TR-3), so owner
+ * first, then by when the membership was created, then by id so two rows written in the same
+ * transaction still have an order. The debt algorithm's tie-break is defined on it too, which is
+ * why it is one query here rather than an ordering each caller repeats.
+ *
+ * Null for a caller who is not a member. Both readers below go through it, so "who is in this
+ * group" has exactly one answer in the product.
+ */
+async function readActiveMemberRows(session: Session, groupId: string, userId: string) {
   const membership = await readMembership(session, groupId, userId);
   if (!membership) return null;
 
-  const rows = await session
+  return await session
     .select({
       memberId: members.id,
       profileName: users.displayName,
@@ -262,10 +286,62 @@ export async function readMembers(session: Session, groupId: string, userId: str
     .from(members)
     .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.groupId, groupId), isNull(members.removedAt)))
-    // The CANONICAL member order, which the expense form's participant picker renders and the
-    // split's remainder rule names (TR-3): owner first, then by when the membership was
-    // created, then by id so two rows written in the same transaction still have an order.
     .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
+}
+
+/**
+ * The group's ledger, summed per member: paid minus shared, and nothing else.
+ *
+ * This is the ONE place expense rows are added up for a balance (TR-4), and it is why the rule
+ * is enforced rather than remembered: expense_split_input is not joined here, expense.split_type
+ * is not read here, and there is no other function in src/ that sums an expense. A member with
+ * no rows at all is absent from the map, which every caller reads as zero.
+ *
+ * The membership predicate travels inside both statements' WHERE clause like every other read in
+ * this module, so a non-member — or a forged group id — gets an empty map rather than a number.
+ */
+async function readNetByMember(session: Session, groupId: string, userId: string): Promise<Map<string, bigint>> {
+  const paid = await session
+    .select({
+      memberId: expensePayer.memberId,
+      totalMinor: sql<string>`sum(${expensePayer.amountMinor})::text`,
+    })
+    .from(expensePayer)
+    .innerJoin(expenses, eq(expenses.id, expensePayer.expenseId))
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .groupBy(expensePayer.memberId);
+
+  const shared = await session
+    .select({
+      memberId: expenseShare.memberId,
+      totalMinor: sql<string>`sum(${expenseShare.amountMinor})::text`,
+    })
+    .from(expenseShare)
+    .innerJoin(expenses, eq(expenses.id, expenseShare.expenseId))
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .groupBy(expenseShare.memberId);
+
+  const paidByMember = new Map(paid.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const sharedByMember = new Map(shared.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const ledger: MemberLedger[] = [...new Set([...paidByMember.keys(), ...sharedByMember.keys()])].map(
+    (memberId) => ({
+      memberId,
+      paidMinor: paidByMember.get(memberId) ?? 0n,
+      sharedMinor: sharedByMember.get(memberId) ?? 0n,
+    }),
+  );
+
+  // netBalances does the subtraction, so the definition of a balance is in one function rather
+  // than in each read that needs it.
+  return new Map(netBalances(ledger).map((balance) => [balance.memberId, balance.balanceMinor]));
+}
+
+/** The group's active members, owner first, each with their real balance. Null for a non-member. */
+export async function readMembers(session: Session, groupId: string, userId: string): Promise<MemberRow[] | null> {
+  const rows = await readActiveMemberRows(session, groupId, userId);
+  if (!rows) return null;
+
+  const nets = await readNetByMember(session, groupId, userId);
 
   return rows.map((row) => ({
     memberId: row.memberId,
@@ -275,8 +351,58 @@ export async function readMembers(session: Session, groupId: string, userId: str
     displayName: row.profileName ?? row.storedName ?? 'Member',
     isOwner: row.isOwner,
     isPlaceholder: row.userId === null,
-    balanceMinor: 0n,
+    balanceMinor: nets.get(row.memberId) ?? 0n,
   }));
+}
+
+/**
+ * Every active member's net balance in the group, in canonical member order, from expense_payer
+ * and expense_share alone (TR-4). Null for a caller who is not an active member.
+ *
+ * The balances screen and the group overview ask this; the members screen asks readMembers,
+ * because it also needs each row's role. Both read the same sums through readNetByMember.
+ */
+export async function readBalancesForGroup(
+  session: Session,
+  groupId: string,
+  userId: string,
+): Promise<GroupBalances | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const rows = await readActiveMemberRows(session, groupId, userId);
+  if (!rows) return null;
+
+  const nets = await readNetByMember(session, groupId, userId);
+
+  return {
+    viewerMemberId: membership.memberId,
+    members: rows.map((row) => ({
+      memberId: row.memberId,
+      displayName: row.profileName ?? row.storedName ?? 'Member',
+      balanceMinor: nets.get(row.memberId) ?? 0n,
+    })),
+  };
+}
+
+/**
+ * One member's net balance, for the two writes TR-13 gates on it: leaving and being removed.
+ *
+ * Null for a caller who is not themselves an active member of the group, so a forged request
+ * cannot read somebody else's balance — and, more to the point, cannot read it as zero and walk
+ * through a guard that is the only thing standing between a settled group and a stranded debt.
+ */
+export async function readNetBalanceForMember(
+  session: Session,
+  groupId: string,
+  memberId: string,
+  userId: string,
+): Promise<bigint | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const nets = await readNetByMember(session, groupId, userId);
+  return nets.get(memberId) ?? 0n;
 }
 
 /**
@@ -394,15 +520,66 @@ export async function resolveGroupByToken(session: Session, token: string): Prom
  */
 export async function listGroupsForUser(session: Session, userId: string): Promise<GroupSummary[]> {
   const rows = await session
-    .select({ id: groups.id, name: groups.name, type: groups.type, currency: groups.currency })
+    .select({
+      id: groups.id,
+      name: groups.name,
+      type: groups.type,
+      currency: groups.currency,
+      // The caller's own membership row in each group, carried so the two sums below can be
+      // keyed by it: a caller has exactly one active row per group, so it identifies both.
+      memberId: members.id,
+    })
     .from(groups)
     .innerJoin(members, and(eq(members.groupId, groups.id), eq(members.userId, userId), isNull(members.removedAt)))
     .leftJoin(activity, eq(activity.groupId, groups.id))
     .where(isNull(groups.archivedAt))
-    .groupBy(groups.id)
+    // members.id is not functionally dependent on the grouped groups.id — it is another table's
+    // key — so it has to be named here for Postgres to accept selecting it.
+    .groupBy(groups.id, members.id)
     .orderBy(sql`max(${activity.createdAt}) desc nulls last`, desc(groups.createdAt));
 
-  return rows.map((row) => ({ ...row, balanceMinor: 0n }));
+  // The caller's own balance in each group, summed from the stored rows exactly as a single
+  // group's is (TR-4) — the same rows, the same definition, so a figure here cannot disagree
+  // with the figure the group's own screen shows. The join onto their own membership row is
+  // also the authorisation: another member's payer and share rows are not reachable from here.
+  const paid = await session
+    .select({
+      memberId: expensePayer.memberId,
+      totalMinor: sql<string>`sum(${expensePayer.amountMinor})::text`,
+    })
+    .from(expensePayer)
+    .innerJoin(expenses, eq(expenses.id, expensePayer.expenseId))
+    .innerJoin(members, eq(members.id, expensePayer.memberId))
+    .where(and(eq(members.userId, userId), isNull(members.removedAt), isNull(expenses.deletedAt)))
+    .groupBy(expensePayer.memberId);
+
+  const shared = await session
+    .select({
+      memberId: expenseShare.memberId,
+      totalMinor: sql<string>`sum(${expenseShare.amountMinor})::text`,
+    })
+    .from(expenseShare)
+    .innerJoin(expenses, eq(expenses.id, expenseShare.expenseId))
+    .innerJoin(members, eq(members.id, expenseShare.memberId))
+    .where(and(eq(members.userId, userId), isNull(members.removedAt), isNull(expenses.deletedAt)))
+    .groupBy(expenseShare.memberId);
+
+  const paidByMember = new Map(paid.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const sharedByMember = new Map(shared.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const ledger: MemberLedger[] = rows.map((row) => ({
+    memberId: row.memberId,
+    paidMinor: paidByMember.get(row.memberId) ?? 0n,
+    sharedMinor: sharedByMember.get(row.memberId) ?? 0n,
+  }));
+  const balances = new Map(netBalances(ledger).map((balance) => [balance.memberId, balance.balanceMinor]));
+
+  return rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    type: row.type,
+    currency: row.currency,
+    balanceMinor: balances.get(row.memberId) ?? 0n,
+  }));
 }
 
 /**
