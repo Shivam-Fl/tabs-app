@@ -95,18 +95,20 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
           {mode === 'sign-up' ? 'Create account' : 'Sign in'}
         </Button>
       </form>
+      {/* The cross-links are bare anchors inside this paragraph, and the 44px minimum on both
+          axes does not apply to an inline box — inline-flex is what makes it apply. */}
       <p className="mt-space-4 text-sm text-text-muted">
         {mode === 'sign-up' ? (
           <>
             Already have an account?{' '}
-            <a href="/sign-in" className="text-primary underline">
+            <a href="/sign-in" className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
               Sign in
             </a>
           </>
         ) : (
           <>
             New here?{' '}
-            <a href="/sign-up" className="text-primary underline">
+            <a href="/sign-up" className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
               Create an account
             </a>
           </>

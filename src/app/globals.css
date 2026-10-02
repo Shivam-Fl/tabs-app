@@ -19,12 +19,16 @@
   --color-negative: #b3261e;
   --color-focus: #1f5eff;
 
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-6: 24px;
-  --space-8: 32px;
+  /* The `space` infix is docs/ui.md's name for these, kept so a utility reads as the token
+     it came from: gap-space-3 is --space-3. The --spacing-* prefix is not decoration — it is
+     the Tailwind v4 namespace that generates those utilities at all. A token declared
+     --space-3 emits nothing, silently, and every spacing use in src/ compiles to no rule. */
+  --spacing-space-1: 4px;
+  --spacing-space-2: 8px;
+  --spacing-space-3: 12px;
+  --spacing-space-4: 16px;
+  --spacing-space-6: 24px;
+  --spacing-space-8: 32px;
 
   --radius: 8px;
 

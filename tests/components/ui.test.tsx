@@ -1,10 +1,23 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Shell } from '@/components/shell';
+import { AuthForm } from '@/components/auth-form';
 import { HomeEmpty } from '@/components/home-empty';
 import { Button, Card, Dialog, EmptyState, ErrorState, Field, Input, Money, Skeleton, TopBar } from '@/components/ui';
+
+// Shell's sign-out control and AuthForm both import Server Actions, which import the
+// database. This suite asserts markup, so they are replaced with the smallest stand-in that
+// keeps the components renderable: the actions are never invoked, and the router is a no-op.
+vi.mock('@/app/actions/auth', () => ({
+  signIn: vi.fn(),
+  signUp: vi.fn(),
+  signOut: vi.fn(),
+}));
+vi.mock('next/navigation', () => ({
+  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+}));
 
 /**
  * The structural half of AC-10, on the composition the pages actually render.
@@ -200,5 +213,43 @@ describe('the top bar', () => {
     expect(screen.getByRole('link', { name: 'Priya' })).toHaveAttribute('href', '/settings');
     expect(container.querySelector('nav')).not.toBeNull();
     expect(container.querySelector('[aria-expanded]')).toBeNull();
+  });
+});
+
+/**
+ * The 44px minimum touch target, asserted on the markup that produces it.
+ *
+ * These assert the CLASSES, never a measured height, and they have to: jsdom computes no
+ * layout, so getBoundingClientRect() returns 0x0 for every element on earth and a test that
+ * read it would pass at 44px and fail at 19px for reasons that have nothing to do with the
+ * code. The measured 44px and the 8px separation are asserted by AC-12 in a real browser,
+ * which is the only place they are observable — nothing CI runs can see them.
+ *
+ * What these guard is the half of BUG-1 that lives in the markup: three inline anchors whose
+ * min-height the engine silently discards, because min-height does not apply to a
+ * non-replaced inline box. `inline-flex` is what makes the utility apply at all, so it is
+ * asserted and not left as a comment — dropping it is exactly the patch that looks right and
+ * leaves the link at 24px.
+ */
+describe('every link is a 44px target', () => {
+  it('the top-bar brand link carries both minimums and is not a bare inline anchor', () => {
+    render(<TopBar user={user} />);
+
+    const brand = screen.getByRole('link', { name: 'Tabs' });
+    expect(brand.className).toContain('min-h-[44px]');
+    expect(brand.className).toContain('min-w-[44px]');
+    expect(brand.className).toContain('inline-flex');
+  });
+
+  it.each([
+    ['sign-up', 'Sign in'],
+    ['sign-in', 'Create an account'],
+  ])('the %s cross-link to "%s" carries both minimums and is not a bare inline anchor', (mode, name) => {
+    render(<AuthForm mode={mode as 'sign-in' | 'sign-up'} />);
+
+    const crossLink = screen.getByRole('link', { name });
+    expect(crossLink.className).toContain('min-h-[44px]');
+    expect(crossLink.className).toContain('min-w-[44px]');
+    expect(crossLink.className).toContain('inline-flex');
   });
 });
