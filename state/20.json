@@ -307,7 +307,7 @@
       "action": "-> ci-red"
     }
   ],
-  "resume_at": "qa",
+  "resume_at": "implement",
   "flow_plan": {
     "kind": "bug",
     "confidence": 85,
@@ -319,7 +319,7 @@
     },
     "decided_at": "2026-10-02T16:22:55.340Z"
   },
-  "stopped_at": "qa",
+  "stopped_at": "implement",
   "dispatched_stage": "qa",
   "validated_from": "plan",
   "validated_at": "2026-10-02T16:34:50.538Z",
