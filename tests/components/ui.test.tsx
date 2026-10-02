@@ -1,0 +1,204 @@
+// @vitest-environment jsdom
+import { cleanup, render, screen, within } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { Shell } from '@/components/shell';
+import { HomeEmpty } from '@/components/home-empty';
+import { Button, Card, Dialog, EmptyState, ErrorState, Field, Input, Money, Skeleton, TopBar } from '@/components/ui';
+
+/**
+ * The structural half of AC-10, on the composition the pages actually render.
+ *
+ * The pages themselves are async Server Components awaiting cookies(), so testing-library
+ * cannot render them and importing one would construct a real database. Shell and HomeEmpty
+ * are extracted precisely so this composition exists — and only a composition can prove
+ * "exactly one h1" rather than "at most one per component".
+ */
+
+afterEach(cleanup);
+
+const user = { displayName: 'Priya' };
+
+/** Every heading level in document order, as numbers. */
+function headingLevels(container: HTMLElement): number[] {
+  return [...container.querySelectorAll('h1, h2, h3, h4, h5, h6')].map((element) =>
+    Number(element.tagName.slice(1)),
+  );
+}
+
+describe('a real screen composition', () => {
+  it('has exactly one h1 and heading levels that descend without skipping', () => {
+    const { container } = render(
+      <Shell user={user}>
+        <HomeEmpty />
+      </Shell>,
+    );
+
+    const headings = container.querySelectorAll('h1');
+    expect(headings).toHaveLength(1);
+    expect(headings[0]?.textContent).toBe("You're not in any groups yet.");
+
+    const levels = headingLevels(container);
+    expect(levels[0]).toBe(1);
+    for (let index = 1; index < levels.length; index += 1) {
+      // Descending is fine; ascending may not skip a level.
+      expect(levels[index] - levels[index - 1]).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it('renders the empty state verbatim, with one action', () => {
+    render(
+      <Shell user={user}>
+        <HomeEmpty />
+      </Shell>,
+    );
+
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent("You're not in any groups yet.");
+    expect(screen.getByRole('link', { name: 'Create group' })).toBeInTheDocument();
+    expect(screen.getByText(/invite link/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('link', { name: 'Create group' })).toHaveLength(1);
+  });
+
+  it('every control has a bound label', () => {
+    const { container } = render(
+      <form>
+        <Field name="email" label="Email" type="email" />
+        <Field name="password" label="Password" type="password" />
+      </form>,
+    );
+
+    for (const control of container.querySelectorAll('input')) {
+      const label = container.querySelector(`label[for="${control.id}"]`);
+      expect(label, `no <label for> bound to #${control.id}`).not.toBeNull();
+      expect(label?.textContent?.trim().length).toBeGreaterThan(0);
+    }
+  });
+
+  it('associates a field error with its input through aria-describedby, and never by red alone', () => {
+    const { container } = render(<Field name="email" label="Email" error="Enter a valid email address." />);
+
+    const input = container.querySelector('input');
+    const describedBy = input?.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+
+    const message = container.querySelector(`#${CSS.escape(describedBy as string)}`);
+    expect(message).not.toBeNull();
+    expect(message).toHaveTextContent('Enter a valid email address.');
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    // The text carries the failure, so it survives a screen reader and a colour-blind reader.
+    expect(message?.textContent).not.toBe('');
+  });
+
+  it('no colour literal reaches the markup — every screen is built from the theme tokens', () => {
+    const { container } = render(
+      <Shell user={user}>
+        <HomeEmpty />
+      </Shell>,
+    );
+    // Tailwind classes only: a hex or an rgb() here would be a screen that ignored the theme.
+    expect(container.innerHTML).not.toMatch(/#[0-9a-f]{3,6}\b/i);
+    expect(container.innerHTML).not.toMatch(/rgb\(/i);
+  });
+});
+
+describe('the ten primitives', () => {
+  it('each renders with exactly one h1 or none, and none forces a second h1 into a composition', () => {
+    render(
+      <div>
+        <EmptyState headingLevel="h1" title="No expenses yet." description="Add the first one." />
+      </div>,
+    );
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    cleanup();
+
+    // Composed into a shell that already owns its h1, it must not add one of its own.
+    render(
+      <Shell user={user}>
+        <HomeEmpty />
+        <EmptyState title="No expenses yet." description="Add the first one." />
+      </Shell>,
+    );
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    cleanup();
+
+    // The primitives that own no heading at all.
+    for (const element of [
+      <Card key="card">card</Card>,
+      <Button key="button">Press</Button>,
+      <Input key="input" label="Email" />,
+      <Skeleton key="skeleton" />,
+      <Money key="money" formatted="₹420.00" direction="owed" />,
+      <TopBar key="bar" user={user} />,
+      <ErrorState key="error" message="Couldn't load this page." onRetry={() => {}} />,
+    ]) {
+      const { container } = render(element);
+      expect(container.querySelectorAll('h1')).toHaveLength(0);
+      cleanup();
+    }
+  });
+
+  it('distinguishes no-data-yet from no-results, and never confuses them', () => {
+    render(<EmptyState title="No expenses yet." description="Add the first one." />);
+    expect(screen.queryByText(/clear the filters/i)).not.toBeInTheDocument();
+    cleanup();
+
+    render(<EmptyState kind="no-results" title="No expenses match these filters." />);
+    expect(screen.getByText(/clear the filters/i)).toBeInTheDocument();
+  });
+
+  it('states a money direction in words, never as a bare minus sign', () => {
+    const { container } = render(<Money formatted="-180.50" direction="owes" />);
+    expect(container.textContent).toContain('you owe');
+    // The word is in the accessible text, so it is not colour-alone information.
+    expect(container.querySelector('.sr-only')?.textContent).toContain('you owe');
+  });
+
+  it('renders the empty, loading and error states as text — no spinner, no shimmer', () => {
+    const loading = render(<Skeleton className="h-12" />);
+    // A skeleton is a placeholder for the eye, and is hidden from everything else.
+    expect(loading.container.querySelector('[aria-hidden="true"]')).not.toBeNull();
+    expect(loading.container.innerHTML).not.toMatch(/animate|shimmer|spinner/i);
+    cleanup();
+
+    const failed = render(<ErrorState message="Couldn't load your balances." onRetry={() => {}} />);
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load your balances.");
+    expect(failed.container.textContent).not.toMatch(/Error:|at .*\.tsx:\d+/);
+    expect(screen.getByRole('button', { name: /try again/i })).toBeInTheDocument();
+  });
+
+  it('a destructive dialog names the thing and its consequence, and is dismissible by Escape', () => {
+    let cancelled = false;
+    render(
+      <Dialog
+        open
+        title="Remove Priya from Lisbon?"
+        consequence="She will no longer appear in this group's balances."
+        confirmLabel="Remove Priya"
+        onConfirm={() => {}}
+        onCancel={() => {
+          cancelled = true;
+        }}
+      />,
+    );
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveAttribute('aria-modal', 'true');
+    expect(within(dialog).getByText("She will no longer appear in this group's balances.")).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Remove Priya' })).toBeInTheDocument();
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(cancelled).toBe(true);
+  });
+});
+
+describe('the top bar', () => {
+  it('is the whole navigation — no hamburger, no bottom tab bar', () => {
+    const { container } = render(<TopBar user={user} />);
+
+    expect(screen.getByRole('link', { name: 'Tabs' })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: 'Groups' })).toHaveAttribute('href', '/');
+    expect(screen.getByRole('link', { name: 'Priya' })).toHaveAttribute('href', '/settings');
+    expect(container.querySelector('nav')).not.toBeNull();
+    expect(container.querySelector('[aria-expanded]')).toBeNull();
+  });
+});

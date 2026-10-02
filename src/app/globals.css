@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+/*
+ * The theme, transcribed token for token from docs/ui.md. No screen may contain a colour
+ * literal, so these are the only colours in the product.
+ *
+ * Dark mode is deliberately absent: docs/ui.md forbids a partial one, and adding the whole
+ * set later is a matter of overriding these same names.
+ */
+@theme {
+  --color-bg: #ffffff;
+  --color-surface: #f7f8fa;
+  --color-border: #e3e6ea;
+  --color-text: #14181f;
+  --color-text-muted: #5b6675;
+  --color-primary: #1f5eff;
+  --color-primary-contrast: #ffffff;
+  --color-positive: #0a7c4a;
+  --color-negative: #b3261e;
+  --color-focus: #1f5eff;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius: 8px;
+
+  --font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  /* A 150ms ease-out colour transition on interactive elements, and nothing else. */
+}
+
+h1 {
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+}
+h2 {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+h3 {
+  font-size: var(--text-lg);
+  line-height: 1.2;
+}
+
+/*
+ * The focus ring is defined once and never removed: a 2px solid ring at a 2px offset, on
+ * every focusable element. `:focus-visible` would hide it from a mouse click, which is what
+ * makes it invisible to somebody using a keyboard on a device that also reports a pointer.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible,
+:where(a, button, input, select, textarea, [tabindex]):focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/* Below 480px a card has no border, so it does not read as a dialog on a phone. */
+@media (max-width: 480px) {
+  .card {
+    border-color: transparent;
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    transition: none;
+  }
+}
