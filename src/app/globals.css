@@ -1,6 +1,15 @@
 @import 'tailwindcss';
 
 /*
+ * Tailwind generates a utility for every class name it finds while walking the repository, and
+ * that walk includes tests/. A spelling that exists only in a test — a rejected ceiling the
+ * component test names while recording why it must not come back — therefore compiles into the
+ * stylesheet every visitor downloads. tests/ is not a source of product styles, so the boundary
+ * is drawn here rather than by rewording the test that has to name them.
+ */
+@source not '../../tests';
+
+/*
  * The theme, transcribed token for token from docs/ui.md. No screen may contain a colour
  * literal, so these are the only colours in the product.
  *
