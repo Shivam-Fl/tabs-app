@@ -241,5 +241,20 @@
       }
     ],
     "pr": "28"
-  }
+  },
+  "qa": {
+    "verdict": "pass",
+    "introduced_bugs": 0,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4"
+    ],
+    "sha": "e9a306306e1ee28a13f4fe9f5e827d39901f19eb",
+    "run_id": "37064178065",
+    "work_order_version": 1,
+    "at": "2026-10-02T21:20:00.908Z"
+  },
+  "qa_open_bugs": []
 }
