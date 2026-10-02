@@ -95,7 +95,10 @@
     "version": 1,
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/app/actions/expenses.ts",
+    "tests/integration/expenses.test.ts"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
