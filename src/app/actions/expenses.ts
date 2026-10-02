@@ -52,8 +52,8 @@ const MAX_NOTE = 500;
 
 /**
  * The largest value the int8 columns hold: amount_minor on expenses and on expense_payer, and
- * input_value on expense_split_input. parseMajorUnits reads anything — it builds the whole part
- * with BigInt rather than a float — so without this bound an oversized figure reaches the insert
+ * input_value on expense_split_input. The parsers read anything — parseDecimal builds the whole
+ * part with BigInt rather than a float — so without this bound an oversized figure reaches the insert
  * and Postgres raises out-of-range, which the form sees as an uncaught 500 instead of a sentence
  * beside the field that caused it.
  */
@@ -298,12 +298,17 @@ function validateExpense(input: {
       fieldErrors[`input.${member.memberId}`] ??= parsed.message;
       return { memberId: member.memberId, value: 0n };
     }
-    // An exact input is money in minor units and a share count is a plain count, and BOTH are
-    // held in input_value exactly as they were typed — so both carry the same bound as the total
-    // and the payer parts. A percentage needs no bound of its own: any oversized one fails the
-    // sum-to-100% check below before the insert, so it can never reach Postgres.
-    if ((splitType === 'exact' || splitType === 'shares') && parsed.value > MAX_INT8) {
-      fieldErrors[`input.${member.memberId}`] ??= 'That amount is too large to record.';
+    // Every non-null input lands in the int8 input_value column exactly as it was typed —
+    // minor units for an exact split, hundredths of a percent for a percentage, a plain count
+    // for shares — so every one of them carries the same bound as the total and the payer
+    // parts, whatever unit the split type counts in. An exact amount and a share count are
+    // both refused with the amount sentence (#33); a percentage, which the sum-to-100% check
+    // below refuses anyway, keeps the neutral "number".
+    if (parsed.value > MAX_INT8) {
+      fieldErrors[`input.${member.memberId}`] ??=
+        splitType === 'percentage'
+          ? 'That number is too large to record.'
+          : 'That amount is too large to record.';
       return { memberId: member.memberId, value: 0n };
     }
     return { memberId: member.memberId, value: parsed.value };
