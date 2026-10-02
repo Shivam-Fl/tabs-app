@@ -11,7 +11,10 @@ whether to open the entry itself.
 - [docs/ui.md](../../docs/ui.md) — theme tokens, patterns and every screen's five states. Read before touching anything a user sees.
 
 ## Situational
-- [qa/environment.md](qa/environment.md) — env quirks and login recipes. Read before browser QA.
+- [qa/environment.md](qa/environment.md) — why the app may not be reachable at all, how to seed,
+  and whether QA can sign in. Read before browser QA and before reporting a pass.
 - [qa/selectors.md](qa/selectors.md) — selectors known to be stable.
 - [patterns/](patterns/) — bug shapes this repo has produced before. Grep by symptom.
-- [decisions/](decisions/) — why things are as they are. Read before proposing a rewrite.
+- [decisions/](decisions/) — ADR-0001 to ADR-0011, the stack settled once for #1: one data
+  layer with two drivers, no REST layer, migrations on boot, hand-rolled sessions. Read the
+  relevant one before proposing an alternative; each names what it rejected and why.
