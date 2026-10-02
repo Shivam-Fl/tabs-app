@@ -75,5 +75,228 @@
     "decided_at": "2026-10-02T20:31:18.199Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Opening an expense for edit shows description, amount, date, category, note, payers, split type, checked participants and every entered number in saved order",
+        "how_to_verify": "QA opens the edit page for percentage and exact-amount expenses and compares each field to what was typed",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "Percentage splits reopen as typed percentages, shares as typed shares, remainder splits as entered not rewritten",
+        "how_to_verify": "Component test on stored rule rows; QA confirms on edit page",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "A member who has since left is still listed in the edit form, checked, with their name, and a departed payer resolves the same way",
+        "how_to_verify": "Integration setup ends a membership then asserts readExpenseForEdit still returns them checked; QA sees them on the page",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "browser"
+      },
+      {
+        "check": "One save changing amount, payers, participants and split type replaces the parent row plus payer/share/split-input rows in one transaction with the activity entry; balances move by exactly the difference",
+        "how_to_verify": "Integration test asserting per-member deltas equal new-minus-old rows plus exactly one expense.edited entry",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "Edit activity entry names each moved field with old/new values and omits unchanged fields; an untouched save writes one entry with empty detail",
+        "how_to_verify": "Integration test editing two fields asserts detail carries exactly those two changes; untouched save asserts empty detail",
+        "id": "AC-5",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "check": "Saving an untouched form leaves payer/share/split-input rows and every derived balance unchanged (expense row updated_at excepted) and writes one entry with empty detail",
+        "how_to_verify": "Integration test asserting child rows and derived balances unchanged after identical re-save",
+        "id": "AC-6",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "Any member can delete after a naming dialog; delete removes all three child row sets plus deleted_at in-transaction with one entry, restores balances, and the list confirms in place from the id-only parameter; second delete writes nothing",
+        "how_to_verify": "QA drives dialog and list confirmation; integration test asserts rows gone, balances restored, one expense.deleted entry, idempotent re-delete",
+        "id": "AC-7",
+        "source": "IAC-7",
+        "verify": "browser"
+      },
+      {
+        "check": "Split-algorithm or rounding-rule change never re-evaluates stored history; stored rows and balances unchanged",
+        "how_to_verify": "Integration test changing the rule and asserting all other shares and balances unchanged",
+        "id": "AC-8",
+        "source": "IAC-8",
+        "verify": "test"
+      },
+      {
+        "check": "Edit field errors render beside fields in negative colour, associated, announced, focus first invalid, values kept",
+        "how_to_verify": "Component test on refused edit submit; QA tabs the edit page",
+        "id": "AC-9",
+        "source": "IAC-9",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "One shared validation helper for create and update",
+        "rejected_because": "Create's active-only member set would refuse legitimate edits touching departed members (AC-3/AC-6); the update path needs its own active-UNION-expense-referenced member set."
+      },
+      {
+        "approach": "Skip the write and the feed entry when an untouched save moves nothing",
+        "rejected_because": "Conditional writes complicate the exactly-one-entry invariant (TR-17) and AC-6's rewrite expectation; always writing one entry with empty detail keeps the rule total and testable."
+      }
+    ],
+    "approach": "Keep the proposal's shape (reuse the create path's write mechanics for edit/delete, shared ExpenseForm, edit page plus dialog delete) but rebuild it on the critique's corrected premises: the update path validates against active members UNION this expense's referenced members, reopen order is canonical member order extended to departed members, delete removes all three child row sets in-transaction, delete navigates via redirect after the transaction in an awaited continuation, the parent-row write is explicit and first (row lock serializing concurrent saves), untouched saves always write one empty-detail entry, the delete confirmation carries the id only, and the edit segment gets its own loading.tsx. Add the integration and component tests the proposal omitted.",
+    "assumptions": [
+      "Archived groups are read-only for expense edit/delete (the action refuses); a person can overturn this.",
+      "Delete confirmation carries the expense id only and renders a fixed or server-resolved sentence, never URL-echoed text."
+    ],
+    "confidence": 78,
+    "confidence_rationale": "Root cause is verified in code for every blocking finding (active-only validation set, unmount-loses-effect navigation, child rows surviving soft delete, no ordinal column, $onUpdate vs byte-identical, missing test files), and the fixes are narrow and follow existing repo patterns (awaited continuation, in-statement guards, canonical order). What keeps this out of the 90s: concurrent-save serialization is reasoned from the row lock rather than load-proven, and the archived-group read-only call is an assumption a person has not confirmed.",
+    "debate_summary": "The critique was right on all ten findings and I accepted every one, upgrading none and dismissing none: the active-member validation set (blocking), the unmount-loses-navigation delete redirect (blocking), child rows surviving soft delete (blocking), the missing reopen order vs remainder-to-first rule (major), zero test files for test-verified criteria (major), the delete-then-insert race (major), the byte-identical-vs-$onUpdate plus empty-detail contradiction (major), the forgeable confirmation parameter (minor), the missing edit loading.tsx (minor), and the unnamed parent-row write (minor). No finding contradicts a decision in plan/brief.md — the brief's stored-split-rule, wholesale in-transaction replace, and never-re-evaluate-history decisions are exactly what the accepted fixes enforce. I folded in the load-bearing missed edge cases (deleted-expense edit guard, idempotent double delete, departed-payer name coalesce, plain-text amount round-trip incl. JPY and percent/share units, empty-participants refusal, archived-group refusal, caller-leaves-before-save) and the regression risks (expense-list DOM reshape, expense-form mock missing updateExpense, create refusal sentences, dynamic route, exhaustive kind map).",
+    "evidence": [
+      "src/lib/access.ts:250-268 readMembers filters isNull(removedAt): active members only",
+      "src/app/actions/expenses.ts:159,193-200 validation byId/included/unknown built from that active-only set",
+      "src/components/member-actions.tsx:32-49 awaited continuation vs effect-lost-on-unmount, the exact bug class the delete redirect would repeat",
+      "src/db/schema.ts:211,230,253 composite PKs with no ordinal on expense_split_input; :180-183 $onUpdate on expenses.updated_at; :279-280 deleted_at comment",
+      "src/lib/money.ts:296-308 remainder to participants[0]; :126-128 grouping separators refused; :43-56 formatMinor emits symbol and separators",
+      "docs/trd.md TR-4 (replace stored rows in-transaction) and TR-17 (exactly one entry); project invariant: balances sum from stored rows alone",
+      "src/app/(app)/groups/[id]/expenses/new/loading.tsx:1-9 edit segment needs its own loading.tsx",
+      "src/components/group-overview.tsx:117 exhaustive Record<ActivityKind,string> needs the two new kinds",
+      "src/lib/access.ts:704-740 joinGroupIfAbsent documents the READ COMMITTED double-pass race shape in this repo"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add expense.edited and expense.deleted to activityKinds with documented edited-detail shape (moved fields with old/new values, unchanged omitted, empty detail when nothing moved). No migration (text column).",
+        "path": "src/db/schema.ts",
+        "why": "New feed kinds must be nameable in the union"
+      },
+      {
+        "action": "edit",
+        "change": "Add readExpenseForEdit (membership-guarded, filters deleted_at, stored inputs in canonical member order extended to departed members by created_at then id, departed names via profile/stored coalesce), replaceExpenseRows (UPDATEs parent row first for a row lock, then deletes/re-inserts payer/share/split-input rows with sum assertions, one transaction with the entry), softDeleteExpense (removes all three child sets plus deleted_at plus one expense.deleted entry in one transaction; second delete writes nothing and answers the same). Update member set is active UNION expense-referenced, never the create active-only set.",
+        "path": "src/lib/access.ts",
+        "why": "Transaction bodies for edit and delete with departed-member and race handling"
+      },
+      {
+        "action": "edit",
+        "change": "Shared field-level validation helpers with separate known-member sets for create (active only) vs update (union); add updateExpense (old/new diff into expense.edited detail, always exactly one entry) and deleteExpense (redirect with expense id only AFTER the transaction resolves, via an awaited continuation); refuse writes in archived groups and after the caller leaves with the create path's 'not available' answer.",
+        "path": "src/app/actions/expenses.ts",
+        "why": "One validation core with correct member sets; IAC-5 diff surface; unmount-safe delete navigation"
+      },
+      {
+        "action": "edit",
+        "change": "Input-text helpers rendering stored inputValue back to plain editable text per split type: no currency symbol or grouping separators, JPY as whole units, percentages/shares in their stored units, so an untouched re-save parses.",
+        "path": "src/lib/money.ts",
+        "why": "IAC-2 exact reopening without AC-6 self-refusal"
+      },
+      {
+        "action": "edit",
+        "change": "Optional initial prop seeding all fields from the stored rule and switching the submit action to updateExpense; single-payer amount fallback never fires on initial render.",
+        "path": "src/components/expense-form.tsx",
+        "why": "Shared form for both writes without fighting seeded values"
+      },
+      {
+        "action": "create",
+        "change": "Edit page with populated form, delete button, and error state for deleted/missing expenses (never reopens a deleted row).",
+        "path": "src/app/(app)/groups/[id]/expenses/[expenseId]/edit/page.tsx",
+        "why": "The edit surface the issue names"
+      },
+      {
+        "action": "create",
+        "change": "Edit-segment skeleton of the populated form so the segment does not inherit the list-shaped skeleton.",
+        "path": "src/app/(app)/groups/[id]/expenses/[expenseId]/edit/loading.tsx",
+        "why": "App Router loading state is a separate file; ui.md edit-loading is edit-only"
+      },
+      {
+        "action": "create",
+        "change": "Dialog-based delete button naming the expense, navigating in the action's awaited continuation to the list with the expense id only.",
+        "path": "src/components/delete-expense-button.tsx",
+        "why": "Destructive-action pattern without the unmount bug"
+      },
+      {
+        "action": "edit",
+        "change": "Whole-row links to edit pages plus in-place deleted confirmation rendering a fixed or server-resolved sentence from the id only.",
+        "path": "src/components/expense-list.tsx",
+        "why": "Rows must lead to edit; post-delete confirmation without forging URL text"
+      },
+      {
+        "action": "edit",
+        "change": "Pass the deleted id search param through to ExpenseList.",
+        "path": "src/app/(app)/groups/[id]/expenses/page.tsx",
+        "why": "Carries confirmation without toasts"
+      },
+      {
+        "action": "edit",
+        "change": "Add expense.edited/deleted sentences to the exhaustive kind map.",
+        "path": "src/components/group-overview.tsx",
+        "why": "Typecheck necessity for the wider union"
+      }
+    ],
+    "issue": 7,
+    "kind": "feature",
+    "mode": "committed",
+    "qa_script": [
+      "Seed, create an expense, open its edit page and confirm every field matches what was typed.",
+      "Edit amount, payers, participants and split type in one save; confirm balances move and the feed names each change.",
+      "Delete an expense via the naming dialog; confirm the list shows an in-place confirmation."
+    ],
+    "reproduced": false,
+    "residual_risks": [
+      "Concurrent overlapping saves serialize on the parent-row UPDATE by reasoning, not by load test — QA cannot easily cover this; watch for unique-violation 500s on double submit.",
+      "Archived-group read-only refusal is assumed, not person-confirmed; if the product wants archived edits, the guard must come out.",
+      "QA should prioritize: JPY/whole-unit and grouped-amount round-trips, emoji descriptions through reopen and diff, back-button onto a deleted expense's edit page, and double delete from two tabs."
+    ],
+    "risks": [
+      "Extracting create validation into shared helpers risks changing create's exact refusal sentences; the integration suite asserting them must pass unchanged.",
+      "Wrapping expense-list rows in links reshapes the row subtree the existing DOM assertions pin; those assertions are revisited in the same change."
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "edit replacing amount, payers, participants and split type moves each balance by exactly new-minus-old with exactly one expense.edited entry",
+          "edited detail names only the moved fields with old/new values; untouched save writes empty detail",
+          "untouched re-save leaves payer/share/split-input rows and derived balances unchanged",
+          "departed participant and departed payer survive an untouched save, still checked, with names",
+          "reopened order is canonical order extended to departed members so the remainder recipient is stable",
+          "delete removes all three child row sets, sets deleted_at, restores balances, writes one entry; second delete writes nothing",
+          "split/rounding rule change leaves stored rows and balances byte-identical",
+          "amount round-trip incl. grouped, JPY whole-unit, percent/share units; empty participants refused with the create sentence; edit of a deleted expense and save-after-leave refused as unavailable"
+        ],
+        "path": "tests/integration/expenses-edit.test.ts"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "mock module gains the updateExpense export so edit-mode renders submit updateExpense",
+          "seeded single-payer amount does not fight the implicit-total fallback on initial render"
+        ],
+        "path": "tests/components/expense-form.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "rows render as whole-row links to the edit page with amount styling and layout intact",
+          "deleted-id confirmation renders a fixed server-resolved sentence and never echoes URL text"
+        ],
+        "path": "tests/components/expense-list.test.tsx"
+      }
+    ],
+    "understanding": "Issue #7 adds expense edit and delete on #6's create/list core under the epic decision (stored split rule, exact reopen, named changes) and rewritten TR-4 (wholesale in-transaction replace of payer/share rows, balances move by exactly the difference, history never re-evaluated). Schema already has split inputs, deletedAt, and text activity kinds, so no migration is needed.",
+    "unknowns": [
+      "Real-concurrency behavior of overlapping edits beyond the parent-row-lock reasoning.",
+      "Whether the maintainer wants archived-group edits allowed (assumed read-only for now)."
+    ],
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T20:40:39.650Z",
+  "validated_ac_changes": []
 }
