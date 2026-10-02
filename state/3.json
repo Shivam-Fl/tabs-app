@@ -276,7 +276,16 @@
   ],
   "on_complete": "merge",
   "artifacts": {},
-  "failure_history": [],
+  "failure_history": [
+    {
+      "stage": "root-cause",
+      "error_signature": "dc1a257e055e7f7e",
+      "error_type": "tool-error",
+      "attempt": 6,
+      "at": "2026-10-02T07:25:44.818Z",
+      "digest": "The root-cause stage failed and no known error pattern matched. The raw output is below."
+    }
+  ],
   "review_history": [
     {
       "criteria": [
