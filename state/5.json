@@ -45,6 +45,11 @@
       "at": "2026-10-02T16:49:32.820Z",
       "agent": "router",
       "action": "route plan -> implement -> review -> qa (model, confidence 90)"
+    },
+    {
+      "at": "2026-10-02T16:56:33.388Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 90)"
     }
   ],
   "epic": 1,
@@ -58,7 +63,7 @@
       "plan": "council",
       "review": "council"
     },
-    "decided_at": "2026-10-02T16:49:32.820Z"
+    "decided_at": "2026-10-02T16:56:33.388Z"
   },
   "stopped_at": null,
   "dispatched_stage": "plan"
