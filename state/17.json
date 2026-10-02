@@ -28,155 +28,48 @@
     "at": "2026-10-02T14:07:11.223Z"
   },
   "work_order": {
-    "issue": 17,
-    "version": 1,
-    "understanding": "Five findings: four from the review of PR #13 (now main at 6c423f4) and one from QA. Three of the four review findings are real and confirmed by reading and rendering the code. (1) The BUG-4 guard at tests/components/ui.test.tsx:307 is /max-w-\\\\[\\\\d/, which matches only a bracket followed by an ASCII digit. (2) The fixture at :294 renders <main /> inside a Shell that already renders <main id=\"main\"> (src/components/shell.tsx:18). I confirmed both by rendering them rather than by reading: the Shell fixture produces container.querySelectorAll('main').length === 2 and 'main main'.length === 1, and swapping the child to <div /> gives exactly 1 and 0. (3) All three files this ticket touches lack a trailing newline: tail -c 1 returns 7d for top-bar.tsx, 7d for shell.tsx, 3b for ui.test.tsx. One correction to the review's premises, re-confirmed: finding 3 says the repo is otherwise consistent about trailing newlines. It is not — 44 tracked .ts/.tsx/.mjs/.json/.css files lack one, including package.json and eslint.config.mjs. Fixing the three this ticket touches is still right; the rest is a separate decision. Finding 4 (scope reconciliation) asks for no code change. The QA overflow finding is dispositioned as not reproducing, and I re-measured it myself rather than inheriting v2's numbers. Chromium runs headless on this runner, so I installed dependencies, ran npm run sdlc:serve against the real production build, signed up through the actual /sign-up form over CDP and measured at 360x640. Result: documentElement.scrollWidth is 360 against clientWidth 360 on both / and /settings; the name link measures 108.77px wide and 44px tall; the Sign out button's right edge lands at 344, inside the viewport; the span computes text-overflow: ellipsis. These match v2's figures exactly. I then attributed QA's number rather than assuming it stale: stripping min-w-0 from the nav in the live page moves scrollWidth to exactly 548 and the name link to 312.81px, reproducing QA's 548px overflow. QA drove a build whose nav lacked min-w-0; the chain that fixes it is present and working on main, so the finding needs no code change. On the reviewer's objection that QA cannot sign in: .sdlc/config.yml sets qa_auth.mode: none, but sign-up is an unauthenticated flow and I verified end to end that it sets an httpOnly, SameSite=Lax tabs_session cookie and redirects to /. The path is /sign-up, not /signup: the config's qa_auth.signup_url says \"/signup\" but src/app/sign-up/page.tsx is the only sign-up route, so the config value points at a 404. I cannot change that (reserved path), so this plan routes QA to /sign-up explicitly. The one thing this version changes from v2 is prose, and it is a correction the reviewer was right to demand: v2's AC-2 and its tests[] case asserted that max-w-[9rem] and max-w-[120px] were spellings the old guard newly caught. That is false. I ran both regexes over them: 9 is an ASCII digit, so /max-w-\\\\[\\\\d/ already matched both max-w-[9rem] and max-w-[120px] (old=true for each). The genuinely newly caught spellings are the ones whose value does not begin with a digit — max-w-[--cap], max-w-[calc(100%-2rem)], max-w-[var(--x)] and max-w-[theme(cap)] (old=false, new=true for each). The code change is right and strictly wider; only the demonstration was wrong, and AC-2 instructs QA to falsify the premise explicitly, so an adversarial check would have failed a PR whose code was correct. I also checked the widened guard's own boundary, which the review did not: Tailwind 4's CSS-variable shorthand max-w-(--cap) carries no bracket and is still not matched by /max-w-\\[/ (old=false, new=false). That is a disclosed limit, not a reason to widen again, and it is now stated in residual_risks rather than implied away.",
-    "root_cause": "Two independent causes and one non-cause. (1) The BUG-4 guard encodes a ceiling syntax rather than the concept: /max-w-\\\\[\\\\d/ means 'a bracketed max-width whose value starts with an ASCII digit', but the intent is 'no max-width ceiling on the display name'. Every bracket-valued Tailwind max-width carries a bracket, so the digit is an unnecessary narrowing. What it genuinely let through were values not beginning with a digit — max-w-[--cap], max-w-[calc(...)], max-w-[var(...)] — not the digit-valued spellings such as max-w-[9rem] and max-w-[120px], which it always caught. (2) The fixture passes an element as Shell's children that duplicates one Shell already renders, so it asserts a DOM shape the application cannot produce — and React logs no validateDOMNesting warning for main-in-main, so it fails silently. (3) The three files were written without a final newline and nothing in the toolchain enforces one. NOT a cause: the QA 360px overflow. min-w-0 on the nav is present on main and load-bearing — removing it alone reproduces QA's 548px exactly. The build QA measured predates that class.",
-    "approach": "Three small edits, all in files this ticket already rewrites, and no layout change. In tests/components/ui.test.tsx: widen the BUG-4 guard from /max-w-\\\\[\\d/ to /max-w-\\\\[/ so any bracketed ceiling is caught, and amend the comment above it which currently claims to be 'the permanent guard against one coming back'. Replace the fixture's <main /> with <div />. Add one assertion that the name link itself does not carry shrink-0 — that is the class whose accidental addition reproduces QA's overflow while every existing assertion stays green. Append a trailing newline to the three files. Deliberately NOT changing top-bar.tsx's classes: the shrink chain measures correct at 360x640 and at the schema's maximum name length, so a layout edit would change working code on the strength of a finding that no longer holds. The only substantive difference from the rejected v2 is that AC-2's demonstration and the matching tests[] case now name spellings the old regex genuinely missed, and say so accurately.",
-    "files": [
-      {
-        "path": "tests/components/ui.test.tsx",
-        "action": "edit",
-        "change": "Three edits plus a newline. (1) At line 307, change `expect(nameLink.className).not.toMatch(/max-w-\\\\[\\\\d/)` to `expect(nameLink.className).not.toMatch(/max-w-\\\\[/)`, and amend the comment block above it (lines 300-306) to say the guard catches any bracketed value rather than only one beginning with a digit. (2) At line 294, replace the child element `<main />` with `<div />`. (3) After the existing `expect(document.querySelector('nav form')?.className).toContain('shrink-0')` at line 322, add `expect(nameLink.className).not.toContain('shrink-0')`, with a comment recording that shrink-0 on the name link is exactly what produced the 548px overflow QA measured, and with it present every other assertion in this case still passes. Finally append a trailing newline (last byte is currently 3b).",
-        "why": "Findings 1 and 2 live in this file, and the new assertion is the guard for the class whose absence made the QA finding unmeasurable in CI."
-      },
-      {
-        "path": "src/components/ui/top-bar.tsx",
-        "action": "edit",
-        "change": "Append a single trailing newline to the end of the file. The last byte is currently 7d (`}`), verified with `tail -c 1 | xxd -p`. No other byte changes, and in particular the class lists on lines 20, 23, 24, 33 and 39 are NOT to be touched.",
-        "why": "Finding 3. The file is in this ticket's diff and no gate catches a missing final newline, so the next unrelated diff here would show a spurious last-line change."
-      },
-      {
-        "path": "src/components/shell.tsx",
-        "action": "edit",
-        "change": "Append a single trailing newline to the end of the file. The last byte is currently 7d (`}`), verified the same way. No other byte changes.",
-        "why": "Finding 3, same reason as top-bar.tsx."
-      }
-    ],
-    "tests": [
-      {
-        "path": "tests/components/ui.test.tsx",
-        "action": "edit",
-        "cases": [
-          "the display-name link carries no bracketed max-width: the old guard matched only a bracket followed by an ASCII digit, so digit-valued spellings such as max-w-[9rem] and max-w-[120px] were already caught and are not what this case demonstrates, while spellings the old guard genuinely missed — max-w-[--cap], max-w-[calc(100%-2rem)] and max-w-[var(--x)] — are now caught",
-          "the Shell fixture composition contains exactly one <main>, with no <main> nested inside another",
-          "the display-name link does not carry shrink-0, so it remains the flex item that gives ground while Groups and the sign-out form stay pinned",
-          "the nav still carries min-w-0, the class whose removal reproduces the 548px overflow and whose loss every other assertion in the case would miss"
-        ]
-      }
-    ],
     "acceptance": [
       {
-        "id": "AC-1",
-        "check": "At a 360x640 viewport, signed in with the 40-character display name Wolfeschlegelsteinhausenbergerdorffenfun, document.documentElement.scrollWidth equals document.documentElement.clientWidth (360) on both / and /settings, and the Sign out button's right edge is within the viewport",
-        "how_to_verify": "Already satisfied on main; a regression guard, not a fix. qa_auth.mode is `none`, so sign up rather than sign in: go to http://localhost:3000/sign-up (NOT /signup, which is what .sdlc/config.yml's qa_auth.signup_url says and which 404s) and create an account with any address at qa.invalid, an 8+ character password, and the display name Wolfeschlegelsteinhausenbergerdorffenfun. Sign-up creates the session and redirects to /. Set the viewport to 360x640 and on both / and /settings read scrollWidth and clientWidth; they must be equal. Measured on main at commit 6c423f4 against the production build: 360 == 360 on both, name link 108.77x44 with text-overflow ellipsis, sign-out right edge 344. If it fails, the shrink chain has regressed — file a new bug rather than weakening the criterion.",
-        "source": "TR-24",
-        "verify": "browser"
+        "check": "At a 360x640 viewport, signed in with the 40-character display name Wolfeschlegelsteinhausenbergerdorffenfun, document.documentElement.scrollWidth equals document.documentElement.clientWidth (360) on both / and /settings",
+        "id": "AC-1"
       },
       {
-        "id": "AC-2",
         "check": "The BUG-4 regression guard rejects every bracketed max-width on the display-name link, including the spellings the previous guard let through",
-        "how_to_verify": "The tests[] case 'the display-name link carries no bracketed max-width'. The premise, stated correctly: the old guard was /max-w-\\\\[\\\\d/, which matches a bracket followed by an ASCII digit, so it already caught max-w-[9rem] and max-w-[120px] — those were never missed and are not what this criterion demonstrates. What it genuinely let through were bracketed values not beginning with a digit: max-w-[--cap], max-w-[calc(100%-2rem)], max-w-[var(--x)] and max-w-[theme(cap)] (verified old=false, new=true for each). To confirm the guard bites rather than decorates, temporarily set the name link's className to include `max-w-[--cap]` — a string the old guard passed and the new one must not — and confirm the suite fails, then revert.",
-        "source": "TR-24",
-        "verify": "test"
+        "id": "AC-2"
       },
       {
-        "id": "AC-3",
         "check": "The Shell composition in the test suite renders exactly one <main> element, with no <main> descendant of another <main>",
-        "how_to_verify": "The tests[] case 'the Shell fixture composition contains exactly one <main>'. React logs no validateDOMNesting warning for main-in-main, so this is asserted structurally rather than watched for in the console. Verified on main before the fix: with <main /> as the child the composition yields querySelectorAll('main').length === 2 and 'main main'.length === 1; with <div /> it yields 1 and 0.",
-        "source": "TR-24",
-        "verify": "test"
+        "id": "AC-3"
       },
       {
-        "id": "AC-4",
-        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green at 7 files and 86 tests",
-        "how_to_verify": "`tail -c 1 <file> | xxd -p` returns 0a for each of the three (currently 7d, 7d, 3b). Then npm run sdlc:verify (tsc --noEmit, eslint, vitest run) passes. Baseline re-confirmed green on main at 7 test files and 86 tests; adding assertions must not drop the count. Note for a fresh runner: `npm run sdlc:verify` fails at typecheck on an uninstalled checkout with a wall of TS2591 'Cannot find name process' errors — run `npm ci` first.",
-        "source": "TR-24",
-        "verify": "test"
+        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green at 8 files and 90 tests",
+        "id": "AC-4"
       },
       {
-        "id": "AC-5",
         "check": "The top bar's class lists are byte-identical to main after this change: no edit to the shrink chain (min-w-0 on the nav, shrink-0 on Groups and the sign-out form, min-w-[44px] on the name link, truncate on its span)",
-        "how_to_verify": "`git diff --stat` shows exactly three files, and `git diff src/components/ui/top-bar.tsx` shows only an added newline at end of file — no changed line in the class attributes. This exists because an earlier plan proposed a layout change on an unmeasured theory; the measurement says the layout is right, and this keeps a later implementer from 'helpfully' adding one.",
-        "source": "TR-24",
-        "verify": "test"
+        "id": "AC-5"
+      },
+      {
+        "check": "BUG-1 — the production stylesheet contains no CSS rule for a class spelling that appears only in tests/. Building the app emits exactly two max-w rules, max-w-[360px] and max-w-[720px], and emits nothing for the class spellings named only in tests/ (max-w-[calc(100%-2rem)], max-w-[var(--x)], max-w-[120px], max-w-[--cap])",
+        "id": "AC-6"
       }
     ],
-    "qa_script": [
-      "Reach a session: open http://localhost:3000/sign-up (NOT /signup — that is the value in .sdlc/config.yml's qa_auth.signup_url and it 404s) and create an account with display name Wolfeschlegelsteinhausenbergerdorffenfun, an address at qa.invalid, and any password of 8+ characters. You land signed in on /. qa_auth.mode is `none`, so this unauthenticated sign-up flow is how a session is obtained; no credentials are provisioned.",
-      "Set the viewport to 360x640. On / read document.documentElement.scrollWidth and .clientWidth (AC-1); both are 360 on main.",
-      "Navigate to /settings and read the same two numbers; also 360. AC-1 covers both pages.",
-      "Confirm the display name in the top bar shows a trailing ellipsis and that Groups and Sign out are both fully visible, with the Sign out button's right edge inside the viewport.",
-      "Set the viewport to 1280x800 and confirm the 40-character name renders in full with no ellipsis. The fix must not reintroduce BUG-4, a ceiling that truncated an ordinary name on a wide header.",
-      "For the strongest version of this check, save an 80-character unbroken name ('W' repeated 80, the schema maximum) on /settings and repeat step 2: on main the page still does not overflow and the name link clamps to about 108px. That is the case the original chain was written for.",
-      "Confirm no console errors on either page.",
-      "Run npm run sdlc:verify and confirm 86 tests still pass."
-    ],
-    "risks": [
-      "The disposition of the QA finding rests on a measurement I took, and QA should take it again rather than trust it. It is reproducible: the numbers are in AC-1's how_to_verify, and the attribution is the strongest evidence — removing min-w-0 from the nav in a live page moves scrollWidth to exactly 548, matching QA's figure, so QA drove a build that lacked the class. If QA sees 548, the fix is to find which build lacks the class, not to change the layout.",
-      "qa_auth.mode is `none` in .sdlc/config.yml and I cannot change it (reserved path), so QA has no provisioned credentials. This plan routes QA through sign-up, an unauthenticated flow I verified end to end (it sets an httpOnly, SameSite=Lax tabs_session cookie and redirects to /). The cost is stated in AC-1: every signed-in check depends on QA reaching /sign-up and completing the form. Separately, the config's qa_auth.signup_url says '/signup' but the only sign-up route is /sign-up, so the config points QA at a 404. Both are the maintainer's; neither is edited here.",
-      "AC-2's guard is a syntax match, not a semantic one: it catches any bracketed Tailwind max-width on the name link, but not an inline style={{maxWidth:'120px'}}, a CSS rule in globals.css, or a container-class ceiling. Carried forward from the review, which explicitly left a general detector out of scope; AC-1 decides the real behaviour.",
-      "The dead `.max-w-\\\\[120px\\\\]{max-width:120px}` rule stays in the built stylesheet, because Tailwind scans the test file's own comment text. It applies to no element and affects no layout, so it is left alone rather than rewording a comment to satisfy the scanner.",
-      "44 tracked source and config files lack a trailing newline. This is a three-file fix, not a repo-wide one, and the inconsistency remains everywhere else by design. It must not be silently widened.",
-      "No file in forbidden_paths is touched and no new host is added, so env.api_allowlist (localhost and 127.0.0.1 only) still covers everything the change makes the app do."
-    ],
-    "out_of_scope": [
-      "The repo-wide trailing-newline inconsistency. 44 tracked .ts/.tsx/.mjs/.json/.css files lack a final newline, including package.json and eslint.config.mjs, contradicting the review's statement that the repo is otherwise consistent. Adding an eol-last rule and reformatting 44 files is a separate change with its own diff.",
-      "Any change to the top bar's layout or classes. Measured correct at 360x640 and at the schema's 80-character maximum. A layout edit would change working code on the strength of a finding that does not reproduce.",
-      "A general ceiling detector that catches an inline style or a CSS rule rather than a bracketed Tailwind class. The reviewer left this out of scope and AC-1 covers the real behaviour.",
-      "Extending the widened guard to Tailwind 4's unbracketed CSS-variable shorthand max-w-(--cap). I confirmed /max-w-\\[/ still does not match it (old=false, new=false). Covering it would need a second alternative such as /max-w-[-[(]/, which is a wider net than the review sanctioned; disclosed in residual_risks instead.",
-      "Re-wording the test file's comment to stop Tailwind emitting the dead .max-w-[120px] rule. Harmless bundle noise; rewording would trade clarity for a cosmetic byte.",
-      "The review's finding 4, scope reconciliation, which asks for no code change — a note about how a 58-file PR should be reviewed, not a defect.",
-      "Changing qa_auth.mode or qa_auth.signup_url in .sdlc/config.yml. Reserved path; the maintainer's change. Raised in risks with the concrete workaround QA should use.",
-      "Splitting the sign-out control into the profile menu docs/ui.md describes. shell.tsx says so itself and this ticket is not the place for it."
-    ],
-    "kind": "chore",
-    "confidence": 93,
-    "confidence_rationale": "Higher than v2's 92 for one reason: v2's remaining flaw was a prose error, and this version's two load-bearing factual claims are now both checked by me directly rather than inherited. I ran the old and new regexes over every spelling the criteria name, and confirmed the reviewer's finding exactly — max-w-[9rem] and max-w-[120px] are old=true, so the premise v2 asserted was false and the spellings that are genuinely new (max-w-[--cap], max-w-[calc(...)], max-w-[var(...)]) are old=false. I also re-derived the layout numbers from scratch on a production build rather than quoting v2: scrollWidth 360 == clientWidth 360 on both pages, name link 108.77x44, sign-out right edge 344, and removing min-w-0 reproduces QA's 548 exactly. Both review findings are now confirmed by rendering rather than reading. The baseline is green at 7 files and 86 tests, and the three trailing-byte values are confirmed. What holds me below the high 90s is unchanged in kind: I cannot inspect the build QA actually ran, so I can prove main is correct and prove what QA saw, but not that no reachable build still lacks min-w-0 — which is why AC-1 is written for QA to repeat and AC-5 exists to stop a later implementer editing a layout that measures correct. I am slightly more confident than 92 because nothing in the plan is now resting on an unverified statement; the gap is environmental and disclosed, not analytical.",
-    "reproduced": false,
-    "evidence": [
-      "Reproduced the QA finding's absence, not its presence, independently of v2: with a real session created through the actual /sign-up form over CDP against `next build && next start`, documentElement.scrollWidth is 360 and clientWidth is 360 on both / and /settings at 360x640. The name link measures 108.77x44 and its span computes text-overflow: ellipsis; the Sign out button's right edge is 344, inside the viewport.",
-      "Attributed QA's number exactly, in a live page: removing min-w-0 from the nav moves scrollWidth to 548 and the name link to 312.81px — QA's figure. So QA drove a build whose nav lacked min-w-0, and the chain that fixes it is present and working on main.",
-      "Confirmed the rejected v2's objection is factually correct, by running both regexes over every spelling named: max-w-[9rem] old=true new=true; max-w-[120px] old=true new=true; max-w-[--cap] old=false new=true; max-w-[calc(100%-2rem)] old=false new=true; max-w-[var(--x)] old=false new=true; max-w-[theme(cap)] old=false new=true. The v2 criterion's premise was false and its example was one the old guard already handled; the code change was right and only the demonstration was wrong.",
-      "Mapped the widened guard's own boundary, which the review did not: Tailwind 4's unbracketed shorthand max-w-(--cap) is old=false new=false, so /max-w-\\[/ does not catch it. Recorded in residual_risks and out_of_scope rather than left implied.",
-      "Confirmed both review findings by rendering them under jsdom rather than by reading: with <main /> as the Shell child, querySelectorAll('main').length is 2 and 'main main'.length is 1, with no React console.error (validateDOMNesting does not cover main-in-main); with <div /> they are 1 and 0.",
-      "Confirmed the three trailing-byte findings by command: tail -c 1 returns 7d for src/components/ui/top-bar.tsx, 7d for src/components/shell.tsx and 3b for tests/components/ui.test.tsx.",
-      "Baseline re-confirmed on this runner: npm ci was required first (an uninstalled checkout fails typecheck with TS2591 errors), after which npm run sdlc:verify is green at 7 test files and 86 tests.",
-      "Verified the sign-up path QA needs under qa_auth.mode: none: creating an account at /sign-up sets an httpOnly, SameSite=Lax tabs_session cookie and redirects to /. The config's signup_url of /signup does not match the route in src/app/sign-up/page.tsx."
-    ],
-    "alternatives_considered": [
+    "approach": "Draw the source boundary Tailwind was never given, in the one place the build config lives: add `@source not '../../tests';` to src/app/globals.css immediately after the `@import 'tailwindcss'` line. Nothing else in product code changes. This is deliberately not a rewording of the comment. Add tests/lib/tailwind-source-scope.test.ts as the regression guard: exclusion exists and names tests/, is not source(none), non-vacuity, path resolves exactly to tests/. Verified by building both revisions and diffing the full emitted rule set.",
+    "files": [
       {
-        "approach": "Widen the guard further, to /max-w-[-[(]/ or a detector that also catches inline maxWidth styles and CSS rules.",
-        "rejected_because": "The review explicitly sanctioned widening to /max-w-\\[/ and explicitly left a general ceiling detector out of scope, so going further would widen the plan without authority. The unbracketed max-w-(--cap) gap is real but disclosed in residual_risks, and AC-1 decides the actual behaviour in a browser where jsdom cannot lie."
+        "action": "edit",
+        "change": "Add `@source not '../../tests';` on the line immediately after `@import 'tailwindcss';`, with a short comment recording why. No other line of the file changes.",
+        "path": "src/app/globals.css"
       },
       {
-        "approach": "Fix the QA overflow by moving min-w-0 or adding a min-w to the display-name link, as an earlier plan proposed.",
-        "rejected_because": "Measured false on the production build: the chain is present and correct, the page does not overflow at 360x640, and removing min-w-0 from the nav reproduces QA's 548px to the decimal. That attributes the finding to a stale build rather than to the markup, so a layout edit would change working code for no reason."
-      },
-      {
-        "approach": "Leave the BUG-4 guard at /max-w-\\[\\d/ and drop the widening, since the code is already correct and the ticket is only about the other findings.",
-        "rejected_because": "The review named this as the one place BUG-4 could return uncaught and recommended exactly this widening. It is correct, it is one character, and it is the substance of finding 1 — dropping it would discard the review's one actionable code ask."
-      },
-      {
-        "approach": "Add an eslint eol-last rule and normalise all 44 affected files in this change.",
-        "rejected_because": "A 44-file reformat is a different change with its own diff and needs the maintainer's call. Fixing the three files this ticket already touches is defensible because they are in this diff; the rest is out of scope and recorded as such."
+        "action": "create",
+        "change": "New Vitest file with four cases guarding the exclusion: declares @source not naming tests/; not source(none); non-vacuity; path resolves to tests/ exactly.",
+        "path": "tests/lib/tailwind-source-scope.test.ts"
       }
     ],
-    "assumptions": [
-      "main is still at 6c423f4 for the three files under edit; if it has moved, AC-5's class lists and the line numbers in files[] should be re-read before editing.",
-      "QA can reach a signed-in state through the unauthenticated /sign-up flow, as verified here, because qa_auth.mode is none and no credentials are provisioned."
-    ],
-    "unknowns": [
-      "Which build QA measured. I can prove main is correct and reproduce QA's 548 by removing min-w-0, but I cannot inspect the artifact QA ran, so I cannot prove no reachable build still lacks the class.",
-      "Why 44 tracked files lack a trailing newline. Whether that is deliberate or drift, and therefore whether it should be fixed repo-wide, is a maintainer's decision this ticket does not make."
-    ],
-    "debate_summary": "v3 changes exactly what the review of v2 required, and I verified that requirement rather than accepting it. The single objection held: v2's AC-2 claimed the old guard missed max-w-[9rem] and max-w-[120px], and instructed QA to falsify that premise. Running both regexes shows 9 is an ASCII digit, so the old guard matched both — the criterion asserted something untrue about its own subject, and an adversarial QA following its own instructions would have failed a correct PR. The code change was right and stays; the prose is corrected to name spellings the old guard genuinely missed (max-w-[--cap], max-w-[calc(...)], max-w-[var(...)], all old=false new=true), and the claim that [9rem] or [120px] were previously missed is dropped. While checking the widened guard I found a boundary the review did not examine — Tailwind 4's unbracketed max-w-(--cap) is still unmatched — which is disclosed in residual_risks rather than fixed, since the review's sanction covered /max-w-\\[/ and no more. Nothing else in v2 changed. I re-derived v2's load-bearing measurements from scratch rather than inheriting them: the layout numbers reproduce exactly on a production build, and both review findings now rest on rendered DOM rather than on reading. Baseline re-confirmed green at 7 files and 86 tests, after npm ci (an uninstalled checkout fails typecheck, which is an environment artifact worth knowing). No route_request: the route was adequate, and the correction the objection demanded belonged to planning.",
-    "residual_risks": [
-      "The widened guard still does not catch Tailwind 4's unbracketed CSS-variable shorthand max-w-(--cap) — verified old=false new=false — because /max-w-\\[/ requires a bracket. A ceiling written that way would reintroduce BUG-4 uncaught. Closing it needs a second alternative such as /max-w-[-[(]/, which exceeds what the review sanctioned, so it is disclosed here and left to a maintainer.",
-      "The widened guard catches a bracketed Tailwind max-width only, not an inline style={{maxWidth:'120px'}} or a CSS rule in globals.css. A disclosed limit carried forward from the review; AC-1 decides the behaviour.",
-      "AC-1 cannot be satisfied by CI. jsdom computes no layout, so if QA does not run it in a browser the overflow is neither confirmed fixed nor confirmed open. This plan reduces that risk rather than removing it: AC-1 is a regression guard over a state QA can reach unauthenticated, and the attribution numbers are in how_to_verify so QA can tell a regression from a different build at a glance.",
-      "Every signed-in check in this ticket depends on QA completing the /sign-up form, because qa_auth.mode is none and no credentials are provisioned. If that flow breaks, AC-1 is unreachable for a reason unrelated to this change."
-    ],
+    "issue": 17,
+    "understanding": "The previous plan was not wrong about the code — all five acceptance criteria passed. But its diagnosis of BUG-1 was wrong in a way that made the fix impossible, which is why QA failed with introduced_by_pr: true. v1 correctly identified the MECHANISM but made the remedy 're-word the comment' while putting rewording out of scope — a plan that cannot converge, since the comment must keep naming the spellings for AC-2's demonstration to mean anything. The new approach is DIFFERENT: declare the source boundary in src/app/globals.css instead of touching prose, verified by building both revisions and diffing the full emitted rule set. Two corrections per plan review: AC-2 no longer lists max-w-[theme(cap)] among spellings the comment names and restores the mutation demonstration; AC-6 is scoped to tests/-only spellings since .sdlc/docs-sourced rules survive by design.",
+    "version": 2,
     "mode": "committed"
   },
   "touch_paths": [
@@ -454,10 +347,10 @@
     }
   ],
   "approved_too_high": false,
-  "work_order_version": 1,
-  "work_order_posted_at": "2026-10-02T11:46:15.255Z",
-  "work_order_from": "plan",
-  "work_order_comment": "5951680327",
+  "work_order_version": 2,
+  "work_order_posted_at": "2026-10-02T14:28:42.998Z",
+  "work_order_from": "root-cause",
+  "work_order_comment": "5954649696",
   "implemented_version": 1,
   "follow_ups": {
     "review": [
@@ -519,95 +412,5 @@
       "run": "37014537058",
       "at": "2026-10-02T14:07:08.183Z"
     }
-  },
-  "validated_work_order": {
-    "acceptance": [
-      {
-        "check": "At a 360x640 viewport, signed in with the 40-character display name Wolfeschlegelsteinhausenbergerdorffenfun, document.documentElement.scrollWidth equals document.documentElement.clientWidth (360) on both / and /settings",
-        "id": "AC-1"
-      },
-      {
-        "check": "The BUG-4 regression guard rejects every bracketed max-width on the display-name link, including the spellings the previous guard let through",
-        "id": "AC-2"
-      },
-      {
-        "check": "The Shell composition in the test suite renders exactly one <main> element, with no <main> descendant of another <main>",
-        "id": "AC-3"
-      },
-      {
-        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green at 8 files and 90 tests",
-        "id": "AC-4"
-      },
-      {
-        "check": "The top bar's class lists are byte-identical to main after this change: no edit to the shrink chain (min-w-0 on the nav, shrink-0 on Groups and the sign-out form, min-w-[44px] on the name link, truncate on its span)",
-        "id": "AC-5"
-      },
-      {
-        "check": "BUG-1 — the production stylesheet contains no CSS rule for a class spelling that appears only in tests/. Building the app emits exactly two max-w rules, max-w-[360px] and max-w-[720px], and emits nothing for the class spellings named only in tests/ (max-w-[calc(100%-2rem)], max-w-[var(--x)], max-w-[120px], max-w-[--cap])",
-        "id": "AC-6"
-      }
-    ],
-    "approach": "Draw the source boundary Tailwind was never given, in the one place the build config lives: add `@source not '../../tests';` to src/app/globals.css immediately after the `@import 'tailwindcss'` line. Nothing else in product code changes. This is deliberately not a rewording of the comment. Add tests/lib/tailwind-source-scope.test.ts as the regression guard: exclusion exists and names tests/, is not source(none), non-vacuity, path resolves exactly to tests/. Verified by building both revisions and diffing the full emitted rule set.",
-    "files": [
-      {
-        "action": "edit",
-        "change": "Add `@source not '../../tests';` on the line immediately after `@import 'tailwindcss';`, with a short comment recording why. No other line of the file changes.",
-        "path": "src/app/globals.css"
-      },
-      {
-        "action": "create",
-        "change": "New Vitest file with four cases guarding the exclusion: declares @source not naming tests/; not source(none); non-vacuity; path resolves to tests/ exactly.",
-        "path": "tests/lib/tailwind-source-scope.test.ts"
-      }
-    ],
-    "issue": 17,
-    "understanding": "The previous plan was not wrong about the code — all five acceptance criteria passed. But its diagnosis of BUG-1 was wrong in a way that made the fix impossible, which is why QA failed with introduced_by_pr: true. v1 correctly identified the MECHANISM but made the remedy 're-word the comment' while putting rewording out of scope — a plan that cannot converge, since the comment must keep naming the spellings for AC-2's demonstration to mean anything. The new approach is DIFFERENT: declare the source boundary in src/app/globals.css instead of touching prose, verified by building both revisions and diffing the full emitted rule set. Two corrections per plan review: AC-2 no longer lists max-w-[theme(cap)] among spellings the comment names and restores the mutation demonstration; AC-6 is scoped to tests/-only spellings since .sdlc/docs-sourced rules survive by design.",
-    "version": 2,
-    "mode": "committed"
-  },
-  "approved_work_order": {
-    "acceptance": [
-      {
-        "check": "At a 360x640 viewport, signed in with the 40-character display name Wolfeschlegelsteinhausenbergerdorffenfun, document.documentElement.scrollWidth equals document.documentElement.clientWidth (360) on both / and /settings",
-        "id": "AC-1"
-      },
-      {
-        "check": "The BUG-4 regression guard rejects every bracketed max-width on the display-name link, including the spellings the previous guard let through",
-        "id": "AC-2"
-      },
-      {
-        "check": "The Shell composition in the test suite renders exactly one <main> element, with no <main> descendant of another <main>",
-        "id": "AC-3"
-      },
-      {
-        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green at 8 files and 90 tests",
-        "id": "AC-4"
-      },
-      {
-        "check": "The top bar's class lists are byte-identical to main after this change: no edit to the shrink chain (min-w-0 on the nav, shrink-0 on Groups and the sign-out form, min-w-[44px] on the name link, truncate on its span)",
-        "id": "AC-5"
-      },
-      {
-        "check": "BUG-1 — the production stylesheet contains no CSS rule for a class spelling that appears only in tests/. Building the app emits exactly two max-w rules, max-w-[360px] and max-w-[720px], and emits nothing for the class spellings named only in tests/ (max-w-[calc(100%-2rem)], max-w-[var(--x)], max-w-[120px], max-w-[--cap])",
-        "id": "AC-6"
-      }
-    ],
-    "approach": "Draw the source boundary Tailwind was never given, in the one place the build config lives: add `@source not '../../tests';` to src/app/globals.css immediately after the `@import 'tailwindcss'` line. Nothing else in product code changes. This is deliberately not a rewording of the comment. Add tests/lib/tailwind-source-scope.test.ts as the regression guard: exclusion exists and names tests/, is not source(none), non-vacuity, path resolves exactly to tests/. Verified by building both revisions and diffing the full emitted rule set.",
-    "files": [
-      {
-        "action": "edit",
-        "change": "Add `@source not '../../tests';` on the line immediately after `@import 'tailwindcss';`, with a short comment recording why. No other line of the file changes.",
-        "path": "src/app/globals.css"
-      },
-      {
-        "action": "create",
-        "change": "New Vitest file with four cases guarding the exclusion: declares @source not naming tests/; not source(none); non-vacuity; path resolves to tests/ exactly.",
-        "path": "tests/lib/tailwind-source-scope.test.ts"
-      }
-    ],
-    "issue": 17,
-    "understanding": "The previous plan was not wrong about the code — all five acceptance criteria passed. But its diagnosis of BUG-1 was wrong in a way that made the fix impossible, which is why QA failed with introduced_by_pr: true. v1 correctly identified the MECHANISM but made the remedy 're-word the comment' while putting rewording out of scope — a plan that cannot converge, since the comment must keep naming the spellings for AC-2's demonstration to mean anything. The new approach is DIFFERENT: declare the source boundary in src/app/globals.css instead of touching prose, verified by building both revisions and diffing the full emitted rule set. Two corrections per plan review: AC-2 no longer lists max-w-[theme(cap)] among spellings the comment names and restores the mutation demonstration; AC-6 is scoped to tests/-only spellings since .sdlc/docs-sourced rules survive by design.",
-    "version": 2,
-    "mode": "committed"
   }
 }
