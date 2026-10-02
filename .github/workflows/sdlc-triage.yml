@@ -51,7 +51,7 @@ permissions:
 jobs:
   diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 255
     # No id-token: the action asks for an OIDC token only when it is NOT given github_token, and
     # any process the agent starts could otherwise mint this repository's OIDC identity.
     permissions:
@@ -142,7 +142,7 @@ jobs:
         # A HANG DETECTOR, not a budget. Reading a long log and the code that threw takes as
         # long as it takes; truncating that to protect a cleanup step trades the work for the
         # bookkeeping.
-        timeout-minutes: 35
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -259,6 +259,11 @@ jobs:
       # a rate limit had stopped the triage.
       - name: Act on the diagnosis
         if: needs.diagnose.result == 'success' || hashFiles('triage.json') != ''
+        env:
+          # Files a framework defect on the framework's repository (lib/report-upstream.js). A
+          # repository's GITHUB_TOKEN cannot open an issue anywhere else; without this, the
+          # diagnosis carries a prefilled link instead.
+          SDLC_UPSTREAM_TOKEN: ${{ secrets.SDLC_UPSTREAM_TOKEN || secrets.SDLC_FRAMEWORK_TOKEN }}
         run: node .sdlc/bin/apply-triage.mjs
 
       # A triage run that fails does NOT triage itself — that is an infinite regress with a

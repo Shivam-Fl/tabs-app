@@ -500,7 +500,7 @@ gates:
 
 limits:
   attempts: 10
-  lock_ttl_minutes: 300    # must exceed the longest job, or the watchdog reclaims a lock
+  lock_ttl_minutes: 600    # must exceed the longest job, or the watchdog reclaims a lock
   repeat_failure_escalate: 2   # the same failure twice puts the PLAN on trial, not the code
 
 # No agent may touch these. Includes the framework's own prompts, scripts and schemas —

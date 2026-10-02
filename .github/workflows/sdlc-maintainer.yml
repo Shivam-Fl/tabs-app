@@ -81,7 +81,7 @@ permissions:
 jobs:
   maintain:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 255
     # Read-only: it reads issues, PRs and the state branch, and nothing it reads can make it
     # push, file, edit, label, comment or dispatch.
     #
@@ -154,7 +154,7 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 40
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -263,7 +263,7 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 40
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}

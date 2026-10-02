@@ -85,7 +85,7 @@ jobs:
   fix:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 150
+    timeout-minutes: 255
     # No id-token: the action asks for one only when it is NOT given github_token.
     permissions:
       contents: read
@@ -162,7 +162,7 @@ jobs:
       - name: Fix the framework
         id: fix
         # A hang detector, sized like the implementer's: it runs on the same model.
-        timeout-minutes: 120
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -261,7 +261,7 @@ jobs:
     # Only a proven fix is worth the maintainer's time; an unproven one is refused by land as is.
     if: always() && needs.verify.outputs.ok == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 255
     permissions:
       contents: read
       issues: read
@@ -308,7 +308,7 @@ jobs:
 
       - name: Ask the maintainer
         id: consult
-        timeout-minutes: 25
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -407,4 +407,6 @@ jobs:
       - name: Land the fix, or stop for a person
         env:
           FRAMEWORK_TOKEN: ${{ secrets.SDLC_FRAMEWORK_TOKEN }}
+          # Reports how this ended on the framework's repository (lib/report-upstream.js).
+          SDLC_UPSTREAM_TOKEN: ${{ secrets.SDLC_UPSTREAM_TOKEN || secrets.SDLC_FRAMEWORK_TOKEN }}
         run: node .sdlc/bin/self-fix-land.mjs

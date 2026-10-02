@@ -16,6 +16,7 @@
 // only then notice there was no PR to start it on, and quietly `continue`.
 import { gh, ghJson, loadConfig, repo as repoOf, setOutput, switchedOff } from './lib/actions.js';
 import { readLedger, updateLedger } from './lib/state-io.js';
+import { inFlight } from './lib/deps.js';
 import { advance } from './lib/advance.js';
 import { dispatchStage } from './lib/route-io.js';
 import { rerunTarget, retryHint } from './lib/flow-graph.js';
@@ -54,6 +55,23 @@ for (const label of ['sdlc:needs-human', 'sdlc:qa-pass']) {
   const pages = await ghJson(['api', '--paginate', '--slurp', `repos/${repo}/issues?state=open&labels=${label}&per_page=100`]);
   for (const i of pages.flat()) if (!i.pull_request) candidates.add(i.number);
 }
+
+// The cap holds here too. An outage parks every issue it hit, and their cooldowns end within the
+// same few minutes — eight at once on actual-sdlc, the very burst that had caused the outage. Each
+// waits its turn instead: it keeps its retry_after, and the next sweep offers it again. A merge
+// runs no agent, so it does not wait.
+const cap = Number(cfg.limits?.max_in_flight ?? 2);
+let running = 0;
+if (cap > 0) {
+  // From labels alone, not by listing every ledger (the sweep reads only the ledgers that can hold
+  // a cooldown). An agent-filed issue labelled in flight but never ledgered counts as running here,
+  // which errs towards waiting.
+  const everyOpen = (await ghJson(['api', '--paginate', '--slurp', `repos/${repo}/issues?state=open&per_page=100`])).flat()
+    .filter((i) => !i.pull_request)
+    .map((i) => ({ number: i.number, state: 'open', labels: (i.labels ?? []).map((l) => ({ name: l.name ?? l })) }));
+  running = inFlight(everyOpen, null);
+}
+let deferred = 0;
 
 let resumed = 0;
 for (const issue of candidates) {
@@ -105,6 +123,8 @@ for (const issue of candidates) {
     continue;
   }
 
+  if (cap > 0 && stage !== 'merge' && running >= cap) { deferred += 1; continue; }
+
   const waited = Math.round((now - new Date(ledger.parked_at ?? ledger.retry_after)) / 60000);
   await clear(issue);
   // merge-pr's "not yet" — checks still running, mergeability UNKNOWN — reuses this cooldown, and
@@ -115,8 +135,9 @@ for (const issue of candidates) {
     : `Cooldown over — starting \`${stage}\` again after the runtime failed. ` +
       `Waited ${waited} minute${waited === 1 ? '' : 's'}.`);
   const r = await dispatchStage({ repo, issue, target, agent: 'watchdog', why: 'the provider cooldown has passed' });
-  if (r.dispatched) resumed += 1;
+  if (r.dispatched) { resumed += 1; if (stage !== 'merge') running += 1; }
 }
+if (deferred) process.stdout.write(`${deferred} cooldown(s) over, waiting for a slot (max_in_flight ${cap}, ${running} running)\n`);
 
 setOutput('resumed', String(resumed));
 process.stdout.write(resumed ? `resumed ${resumed} issue(s) after a cooldown\n` : 'nothing was waiting on a cooldown\n');

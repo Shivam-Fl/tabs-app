@@ -3,9 +3,9 @@
 import { gh, ghJson, setOutput, loadConfig, die, trustedComments, isPipelineAuthor, isTrustedAuthor, repo as repoOf } from './lib/actions.js';
 import { advance } from './lib/advance.js';
 import { riskAreas, hasReproSteps, findDuplicate } from './lib/triage.js';
-import { dependenciesOf, readyToStart, epicOf, dependencyStates } from './lib/deps.js';
+import { admit, dependenciesOf, readyToStart, epicOf, dependencyStates } from './lib/deps.js';
 import { parseCommand } from './lib/commands.js';
-import { readLedger, updateLedger } from './lib/state-io.js';
+import { readLedger, updateLedger, listLedgers } from './lib/state-io.js';
 import { retryHint } from './lib/flow-graph.js';
 import { transition, isLockStale } from './lib/ledger.js';
 import { execFile } from 'node:child_process';
@@ -293,6 +293,33 @@ if (deps.length) {
     await label('sdlc:blocked');
     setOutput('next_state', 'blocked');
     process.stdout.write(`intake: blocked on ${list([...ready.waitingOn, ...ready.abandoned, ...ready.missing])}\n`);
+    process.exit(0);
+  }
+}
+
+// The cap applies to an issue that arrived on its own too (lib/deps.js admit): eight bugs filed in
+// a minute all went straight in, because the cap was only checked where a waiting issue is offered
+// a slot. Not for a dispatched intake — a wake has already taken its slot, and an approval or a
+// retry is a person deciding. The admission is recorded atomically, so a burst cannot all count
+// the same free slot.
+const cap = Number(cfg.limits?.max_in_flight ?? 2);
+if (cap > 0 && process.env.GITHUB_EVENT_NAME === 'issues' && !overridden) {
+  const others = (await ghJson(['api', '--paginate', '--slurp', `repos/${repoOf()}/issues?state=open&per_page=100`]))
+    .flat().filter((i) => !i.pull_request)
+    .map((i) => ({ number: i.number, state: 'open', labels: (i.labels ?? []).map((l) => ({ name: l.name ?? l })) }));
+  const ledgered = new Set(await listLedgers(repoOf()));
+  let verdict = { admitted: true, busy: 0 };
+  await updateLedger(repoOf(), 'admissions', (s) => {
+    verdict = admit({ issue: Number(issue), others, ledgered, recent: s?.recent ?? [], cap });
+    return verdict.admitted ? { ...(s ?? {}), recent: verdict.recent } : null;
+  }).catch((e) => process.stdout.write(`::warning::could not record the admission, so it is let in: ${e.message}\n`));
+  if (!verdict.admitted) {
+    await say(`Ready to start, waiting for a slot. \`limits.max_in_flight\` is ${cap} and ${verdict.busy} issue(s) ` +
+      'are already in the pipeline.\n\nThe watchdog starts this on its own once one of them finishes or stops; ' +
+      '`/sdlc approve` jumps the queue.');
+    await label('sdlc:blocked');
+    setOutput('next_state', 'blocked');
+    process.stdout.write(`intake: queued — ${verdict.busy} of ${cap} slots in use\n`);
     process.exit(0);
   }
 }

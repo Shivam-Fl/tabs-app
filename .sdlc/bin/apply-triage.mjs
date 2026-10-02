@@ -21,6 +21,7 @@ import { resolveStage, rerunTarget, retryHint } from './lib/flow-graph.js';
 import { readWorkOrder } from './lib/work-order.js';
 import { parkForCooldown, waitTries, mergeOnlyStage } from './lib/failure.js';
 import { fixable, selfFixConfig } from './lib/self-fix.js';
+import { reportUpstream, reportLine } from './lib/report-upstream.js';
 
 const exec = promisify(execFile);
 const repo = repoOf();
@@ -100,6 +101,13 @@ if (t.framework_defect && verdict !== 'escalate') {
   override = 'the defect is in the pipeline itself, which no triage may change';
 }
 const selfFix = t.framework_defect && verdict === 'escalate' ? await selfFixable(t.framework_defect) : null;
+// Reported where the framework lives, whether or not it can be fixed here (lib/report-upstream.js).
+// One self-fix takes on is reported when it lands or is refused, saying which.
+const upstream = t.framework_defect && !selfFix?.ok
+  ? await reportUpstream({ cfg, stage, project: repo,
+    defect: { ...t.framework_defect, signature: ledger?.failure_packet?.error_signature },
+    outcome: `It could not be fixed there — ${selfFix?.why ?? 'no file was named'} — and waits for a person in that project.` })
+  : null;
 
 /** Can the self-fix stage take this defect? `{ ok }`, or `{ ok: false, why }` for the comment. */
 async function selfFixable(defect) {
@@ -160,6 +168,7 @@ const body = [
         'land the fix, this stops for a person._'
       : `_Not something the pipeline may fix itself: ${selfFix?.why ?? 'no file was named'}. This is a ` +
         'diagnosis for a person to act on._',
+    ...(upstream ? ['', reportLine(upstream)] : []),
   ].join('\n') : null,
   override ? `\n_Overridden to \`${verdict}\`: ${override}._` : null,
   '',
@@ -211,6 +220,7 @@ if (verdict === 'escalate' && selfFix?.ok) {
     id: `${issue}-${failedRun}`, at: new Date().toISOString(), issue, stage, failed_run: failedRun,
     file: t.framework_defect.file, what: t.framework_defect.what, fix: t.framework_defect.fix,
     diagnosis: t.diagnosis, evidence: t.evidence, status: 'dispatched',
+    signature: ledger?.failure_packet?.error_signature ?? null,
   }].slice(-200) })).then(() => gh(['workflow', 'run', 'sdlc-self-fix.yml', '-f', `issue=${issue}`, '-f', `stage=${stage}`,
     '-f', `failed_run=${failedRun}`, ...(pr ? ['-f', `pr=${pr}`] : [])])).then(() => true)
     .catch((e) => { process.stdout.write(`::warning::could not start the self-fix: ${e.message}\n`); return false; });

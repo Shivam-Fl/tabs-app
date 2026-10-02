@@ -205,7 +205,7 @@ jobs:
     needs: prepare
     if: needs.prepare.outputs.skip != 'true' && needs.prepare.outputs.merge_only != 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 255
     # No id-token: the action asks for an OIDC token only when it is NOT given github_token, and
     # any process the agent starts could otherwise mint this repository's OIDC identity.
     permissions:
@@ -405,7 +405,7 @@ jobs:
         # failure into a failure-packet. A step that fails on its own is answerable; a job
         # that gets cancelled dispatches nobody and leaves the issue looking exactly like one
         # still being worked on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 75
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
