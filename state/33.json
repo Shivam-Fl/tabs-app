@@ -18,7 +18,93 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
+  "work_order": {
+    "acceptance": [
+      {
+        "check": "Submitting a shares-split expense with a share count above 9223372036854775807 (e.g. 99999999999999999999999) is refused with the per-field sentence 'That amount is too large to record.' beside that member's shares input, and no expense is created (no 500, no form-level crash).",
+        "how_to_verify": "Create a group, record an expense with split type shares, type 99999999999999999999999 into one member's shares field and submit; the field error reads 'That amount is too large to record.'",
+        "id": "AC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "A shares-split expense with a share count of exactly 9223372036854775807 is accepted and its input row stores exactly that value.",
+        "how_to_verify": "CI runs the new boundary case in tests/integration/expenses.test.ts asserting expense_split_input.input_value equals 9223372036854775807n.",
+        "id": "AC-2",
+        "verify": "test"
+      },
+      {
+        "check": "Existing bounds are unchanged: an oversized amount, payer part and exact input are still refused with their current sentences, and percentage inputs are still governed only by the sum-to-10000 rule.",
+        "how_to_verify": "CI runs the existing 'amounts the columns cannot hold' cases in tests/integration/expenses.test.ts.",
+        "id": "AC-3",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Clamp an oversized shares count instead of refusing it",
+        "rejected_because": "Storing a different number than the person typed restates their rule silently; every other oversized stored number in this form is refused with a sentence, not clamped."
+      },
+      {
+        "approach": "Put the bound in parseMemberInput or split() in src/lib/money.ts",
+        "rejected_because": "Those helpers have no per-field error key and no currency context; validateExpense already owns the three sibling bounds (amount, payer part, exact input) and both create and update share it."
+      }
+    ],
+    "approach": "Mirror the existing splitType==='exact' MAX_INT8 per-field check in validateExpense onto splitType==='shares', with the identical sentence keyed at input.<memberId>, and correct the stale comment above it that claims a share count needs no bound. Percentages are deliberately left alone: any oversized percentage input fails the sum==10000 check before the insert, so it can never reach Postgres. One shared guard fixes both the create and the update paths because both call validateExpense. Add two integration cases beside the existing exact-input bound case: refusal above the maximum with nothing written, and acceptance at exactly the maximum.",
+    "assumptions": [
+      "The expense form renders input.<memberId> field errors beside the shares inputs the same way it does for exact inputs.",
+      "expense_split_input.input_value remains int8 (bigint) as declared in src/db/schema.ts:251."
+    ],
+    "confidence": 85,
+    "confidence_rationale": "The root cause is one condition in one shared function, and the fix mirrors three identical sibling guards in that same function; both callers share it, so a single change plus two cases beside the existing bound suite covers both paths.",
+    "evidence": [
+      "src/app/actions/expenses.ts:304 bounds only splitType==='exact' against MAX_INT8",
+      "src/app/actions/expenses.ts:60 MAX_INT8 is 9223372036854775807n",
+      "src/lib/money.ts:145 parseDecimal builds an arbitrary-size BigInt with no length bound",
+      "src/db/schema.ts:251 inputValue is bigint (int8)",
+      "tests/integration/expenses.test.ts:690 existing exact-input bound case to mirror",
+      "tests/lib/money.test.ts:437 benign unit coverage for the new formatters, needing no code change"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "In validateExpense, extend the MAX_INT8 per-field bound on split inputs (currently splitType==='exact' only) to also apply when splitType==='shares', refusing with the identical sentence 'That amount is too large to record.' keyed at input.<memberId> via the existing ??= so a parse refusal keeps precedence; and correct the comment above it that claims a share count is a weight needing no bound — percentages truly need none (any oversized input fails the sum==10000 check before the insert), but a shares count is stored verbatim in expense_split_input.input_value (int8).",
+        "path": "src/app/actions/expenses.ts",
+        "why": "This is the one shared validation both createExpense and updateExpense run, and shares is the only stored number it leaves unbounded, so one condition here fixes both paths."
+      }
+    ],
+    "issue": 33,
+    "kind": "bug",
+    "mode": "committed",
+    "out_of_scope": [
+      "tests/lib/money.test.ts bookkeeping: the second review finding records unit coverage PR #29 added outside its work-order lists; it is benign and needs no code change.",
+      "Percentage inputs: intentionally left unbounded per-input, since any oversized value fails the sum==10000 check before the insert and can never reach Postgres.",
+      "Client-side pre-validation of huge share counts: the server refusal is the fix; the form only renders the sentence it returns."
+    ],
+    "qa_script": [
+      "Seed, sign in, and open a group with at least two members.",
+      "Record an expense with split type shares and 99999999999999999999999 in one member's shares field; expect the per-field sentence 'That amount is too large to record.' and no new expense in the list or feed.",
+      "Record the same expense with small share counts; expect success and one expense.added feed entry.",
+      "Reopen the expense, switch nothing, save; expect the stored shares to round-trip unchanged."
+    ],
+    "reproduced": true,
+    "risks": [
+      "The guard sits in validateExpense, which both createExpense and updateExpense share, so a typo in the condition would break both paths; the new cases plus the existing amount/payer/exact bound suite pin it.",
+      "No forbidden paths are touched and the app sends data to no new host."
+    ],
+    "root_cause": "validateExpense bounds the amount, payer parts and exact inputs against MAX_INT8 but leaves shares inputs unbounded; parseDecimal builds an arbitrary-size BigInt, so a share count above 9223372036854775807 passes validation and is written verbatim to expense_split_input.input_value (int8), where Postgres raises out-of-range and the action answers 500 instead of a field sentence. The second review finding (tests/lib/money.test.ts listed in neither files[] nor tests[]) still holds as written but is benign unit coverage for in-scope helpers and needs no code change, so it is dropped from this plan.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "Refuses a shares input above the int8 maximum (e.g. '99999999999999999999999') beside that member's field with 'That amount is too large to record.', writing no expense, payer, share, input or activity rows (mirrors the existing exact-input case).",
+          "Accepts a shares input of exactly the int8 maximum (9223372036854775807) and stores it exactly in expense_split_input (the bound is above-max, not at-max)."
+        ],
+        "path": "tests/integration/expenses.test.ts"
+      }
+    ],
+    "understanding": "Issue #33 carries two review findings from PR #29: (1) a shares-split input has no int8 bound, so a count above 9223372036854775807 passes validation and explodes at the insert with a 500 instead of a field sentence — still true in src/app/actions/expenses.ts:304, which bounds only exact inputs; (2) tests/lib/money.test.ts gained benign unit coverage outside the work-order lists — still true, and needs no code change. This plan fixes (1) with the mirrored bound the review prescribes and drops (2) as recorded-but-benign.",
+    "version": 1
+  },
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [
@@ -69,182 +155,12 @@
   },
   "stopped_at": null,
   "dispatched_stage": "debug",
-  "validated_work_order": {
-    "acceptance": [
-      {
-        "check": "Submitting a shares-split expense with a share count above 9223372036854775807 (e.g. 99999999999999999999999) is refused with the per-field sentence 'That amount is too large to record.' beside that member's shares input, and no expense is created (no 500, no form-level crash).",
-        "how_to_verify": "Create a group, record an expense with split type shares, type 99999999999999999999999 into one member's shares field and submit; the field error reads 'That amount is too large to record.'",
-        "id": "AC-1",
-        "verify": "browser"
-      },
-      {
-        "check": "A shares-split expense with a share count of exactly 9223372036854775807 is accepted and its input row stores exactly that value.",
-        "how_to_verify": "CI runs the new boundary case in tests/integration/expenses.test.ts asserting expense_split_input.input_value equals 9223372036854775807n.",
-        "id": "AC-2",
-        "verify": "test"
-      },
-      {
-        "check": "Existing bounds are unchanged: an oversized amount, payer part and exact input are still refused with their current sentences, and percentage inputs are still governed only by the sum-to-10000 rule.",
-        "how_to_verify": "CI runs the existing 'amounts the columns cannot hold' cases in tests/integration/expenses.test.ts.",
-        "id": "AC-3",
-        "verify": "test"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Clamp an oversized shares count instead of refusing it",
-        "rejected_because": "Storing a different number than the person typed restates their rule silently; every other oversized stored number in this form is refused with a sentence, not clamped."
-      },
-      {
-        "approach": "Put the bound in parseMemberInput or split() in src/lib/money.ts",
-        "rejected_because": "Those helpers have no per-field error key and no currency context; validateExpense already owns the three sibling bounds (amount, payer part, exact input) and both create and update share it."
-      }
-    ],
-    "approach": "Mirror the existing splitType==='exact' MAX_INT8 per-field check in validateExpense onto splitType==='shares', with the identical sentence keyed at input.<memberId>, and correct the stale comment above it that claims a share count needs no bound. Percentages are deliberately left alone: any oversized percentage input fails the sum==10000 check before the insert, so it can never reach Postgres. One shared guard fixes both the create and the update paths because both call validateExpense. Add two integration cases beside the existing exact-input bound case: refusal above the maximum with nothing written, and acceptance at exactly the maximum.",
-    "assumptions": [
-      "The expense form renders input.<memberId> field errors beside the shares inputs the same way it does for exact inputs.",
-      "expense_split_input.input_value remains int8 (bigint) as declared in src/db/schema.ts:251."
-    ],
-    "confidence": 85,
-    "confidence_rationale": "The root cause is one condition in one shared function, and the fix mirrors three identical sibling guards in that same function; both callers share it, so a single change plus two cases beside the existing bound suite covers both paths.",
-    "evidence": [
-      "src/app/actions/expenses.ts:304 bounds only splitType==='exact' against MAX_INT8",
-      "src/app/actions/expenses.ts:60 MAX_INT8 is 9223372036854775807n",
-      "src/lib/money.ts:145 parseDecimal builds an arbitrary-size BigInt with no length bound",
-      "src/db/schema.ts:251 inputValue is bigint (int8)",
-      "tests/integration/expenses.test.ts:690 existing exact-input bound case to mirror",
-      "tests/lib/money.test.ts:437 benign unit coverage for the new formatters, needing no code change"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "In validateExpense, extend the MAX_INT8 per-field bound on split inputs (currently splitType==='exact' only) to also apply when splitType==='shares', refusing with the identical sentence 'That amount is too large to record.' keyed at input.<memberId> via the existing ??= so a parse refusal keeps precedence; and correct the comment above it that claims a share count is a weight needing no bound — percentages truly need none (any oversized input fails the sum==10000 check before the insert), but a shares count is stored verbatim in expense_split_input.input_value (int8).",
-        "path": "src/app/actions/expenses.ts",
-        "why": "This is the one shared validation both createExpense and updateExpense run, and shares is the only stored number it leaves unbounded, so one condition here fixes both paths."
-      }
-    ],
-    "issue": 33,
-    "kind": "bug",
-    "mode": "committed",
-    "out_of_scope": [
-      "tests/lib/money.test.ts bookkeeping: the second review finding records unit coverage PR #29 added outside its work-order lists; it is benign and needs no code change.",
-      "Percentage inputs: intentionally left unbounded per-input, since any oversized value fails the sum==10000 check before the insert and can never reach Postgres.",
-      "Client-side pre-validation of huge share counts: the server refusal is the fix; the form only renders the sentence it returns."
-    ],
-    "qa_script": [
-      "Seed, sign in, and open a group with at least two members.",
-      "Record an expense with split type shares and 99999999999999999999999 in one member's shares field; expect the per-field sentence 'That amount is too large to record.' and no new expense in the list or feed.",
-      "Record the same expense with small share counts; expect success and one expense.added feed entry.",
-      "Reopen the expense, switch nothing, save; expect the stored shares to round-trip unchanged."
-    ],
-    "reproduced": true,
-    "risks": [
-      "The guard sits in validateExpense, which both createExpense and updateExpense share, so a typo in the condition would break both paths; the new cases plus the existing amount/payer/exact bound suite pin it.",
-      "No forbidden paths are touched and the app sends data to no new host."
-    ],
-    "root_cause": "validateExpense bounds the amount, payer parts and exact inputs against MAX_INT8 but leaves shares inputs unbounded; parseDecimal builds an arbitrary-size BigInt, so a share count above 9223372036854775807 passes validation and is written verbatim to expense_split_input.input_value (int8), where Postgres raises out-of-range and the action answers 500 instead of a field sentence. The second review finding (tests/lib/money.test.ts listed in neither files[] nor tests[]) still holds as written but is benign unit coverage for in-scope helpers and needs no code change, so it is dropped from this plan.",
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "Refuses a shares input above the int8 maximum (e.g. '99999999999999999999999') beside that member's field with 'That amount is too large to record.', writing no expense, payer, share, input or activity rows (mirrors the existing exact-input case).",
-          "Accepts a shares input of exactly the int8 maximum (9223372036854775807) and stores it exactly in expense_split_input (the bound is above-max, not at-max)."
-        ],
-        "path": "tests/integration/expenses.test.ts"
-      }
-    ],
-    "understanding": "Issue #33 carries two review findings from PR #29: (1) a shares-split input has no int8 bound, so a count above 9223372036854775807 passes validation and explodes at the insert with a 500 instead of a field sentence — still true in src/app/actions/expenses.ts:304, which bounds only exact inputs; (2) tests/lib/money.test.ts gained benign unit coverage outside the work-order lists — still true, and needs no code change. This plan fixes (1) with the mirrored bound the review prescribes and drops (2) as recorded-but-benign.",
-    "version": 1
-  },
   "validated_from": "plan",
   "validated_at": "2026-10-02T22:38:13.212Z",
   "validated_ac_changes": [],
-  "approved_work_order": {
-    "acceptance": [
-      {
-        "check": "Submitting a shares-split expense with a share count above 9223372036854775807 (e.g. 99999999999999999999999) is refused with the per-field sentence 'That amount is too large to record.' beside that member's shares input, and no expense is created (no 500, no form-level crash).",
-        "how_to_verify": "Create a group, record an expense with split type shares, type 99999999999999999999999 into one member's shares field and submit; the field error reads 'That amount is too large to record.'",
-        "id": "AC-1",
-        "verify": "browser"
-      },
-      {
-        "check": "A shares-split expense with a share count of exactly 9223372036854775807 is accepted and its input row stores exactly that value.",
-        "how_to_verify": "CI runs the new boundary case in tests/integration/expenses.test.ts asserting expense_split_input.input_value equals 9223372036854775807n.",
-        "id": "AC-2",
-        "verify": "test"
-      },
-      {
-        "check": "Existing bounds are unchanged: an oversized amount, payer part and exact input are still refused with their current sentences, and percentage inputs are still governed only by the sum-to-10000 rule.",
-        "how_to_verify": "CI runs the existing 'amounts the columns cannot hold' cases in tests/integration/expenses.test.ts.",
-        "id": "AC-3",
-        "verify": "test"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Clamp an oversized shares count instead of refusing it",
-        "rejected_because": "Storing a different number than the person typed restates their rule silently; every other oversized stored number in this form is refused with a sentence, not clamped."
-      },
-      {
-        "approach": "Put the bound in parseMemberInput or split() in src/lib/money.ts",
-        "rejected_because": "Those helpers have no per-field error key and no currency context; validateExpense already owns the three sibling bounds (amount, payer part, exact input) and both create and update share it."
-      }
-    ],
-    "approach": "Mirror the existing splitType==='exact' MAX_INT8 per-field check in validateExpense onto splitType==='shares', with the identical sentence keyed at input.<memberId>, and correct the stale comment above it that claims a share count needs no bound. Percentages are deliberately left alone: any oversized percentage input fails the sum==10000 check before the insert, so it can never reach Postgres. One shared guard fixes both the create and the update paths because both call validateExpense. Add two integration cases beside the existing exact-input bound case: refusal above the maximum with nothing written, and acceptance at exactly the maximum.",
-    "assumptions": [
-      "The expense form renders input.<memberId> field errors beside the shares inputs the same way it does for exact inputs.",
-      "expense_split_input.input_value remains int8 (bigint) as declared in src/db/schema.ts:251."
-    ],
-    "confidence": 85,
-    "confidence_rationale": "The root cause is one condition in one shared function, and the fix mirrors three identical sibling guards in that same function; both callers share it, so a single change plus two cases beside the existing bound suite covers both paths.",
-    "evidence": [
-      "src/app/actions/expenses.ts:304 bounds only splitType==='exact' against MAX_INT8",
-      "src/app/actions/expenses.ts:60 MAX_INT8 is 9223372036854775807n",
-      "src/lib/money.ts:145 parseDecimal builds an arbitrary-size BigInt with no length bound",
-      "src/db/schema.ts:251 inputValue is bigint (int8)",
-      "tests/integration/expenses.test.ts:690 existing exact-input bound case to mirror",
-      "tests/lib/money.test.ts:437 benign unit coverage for the new formatters, needing no code change"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "In validateExpense, extend the MAX_INT8 per-field bound on split inputs (currently splitType==='exact' only) to also apply when splitType==='shares', refusing with the identical sentence 'That amount is too large to record.' keyed at input.<memberId> via the existing ??= so a parse refusal keeps precedence; and correct the comment above it that claims a share count is a weight needing no bound — percentages truly need none (any oversized input fails the sum==10000 check before the insert), but a shares count is stored verbatim in expense_split_input.input_value (int8).",
-        "path": "src/app/actions/expenses.ts",
-        "why": "This is the one shared validation both createExpense and updateExpense run, and shares is the only stored number it leaves unbounded, so one condition here fixes both paths."
-      }
-    ],
-    "issue": 33,
-    "kind": "bug",
-    "mode": "committed",
-    "out_of_scope": [
-      "tests/lib/money.test.ts bookkeeping: the second review finding records unit coverage PR #29 added outside its work-order lists; it is benign and needs no code change.",
-      "Percentage inputs: intentionally left unbounded per-input, since any oversized value fails the sum==10000 check before the insert and can never reach Postgres.",
-      "Client-side pre-validation of huge share counts: the server refusal is the fix; the form only renders the sentence it returns."
-    ],
-    "qa_script": [
-      "Seed, sign in, and open a group with at least two members.",
-      "Record an expense with split type shares and 99999999999999999999999 in one member's shares field; expect the per-field sentence 'That amount is too large to record.' and no new expense in the list or feed.",
-      "Record the same expense with small share counts; expect success and one expense.added feed entry.",
-      "Reopen the expense, switch nothing, save; expect the stored shares to round-trip unchanged."
-    ],
-    "reproduced": true,
-    "risks": [
-      "The guard sits in validateExpense, which both createExpense and updateExpense share, so a typo in the condition would break both paths; the new cases plus the existing amount/payer/exact bound suite pin it.",
-      "No forbidden paths are touched and the app sends data to no new host."
-    ],
-    "root_cause": "validateExpense bounds the amount, payer parts and exact inputs against MAX_INT8 but leaves shares inputs unbounded; parseDecimal builds an arbitrary-size BigInt, so a share count above 9223372036854775807 passes validation and is written verbatim to expense_split_input.input_value (int8), where Postgres raises out-of-range and the action answers 500 instead of a field sentence. The second review finding (tests/lib/money.test.ts listed in neither files[] nor tests[]) still holds as written but is benign unit coverage for in-scope helpers and needs no code change, so it is dropped from this plan.",
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "Refuses a shares input above the int8 maximum (e.g. '99999999999999999999999') beside that member's field with 'That amount is too large to record.', writing no expense, payer, share, input or activity rows (mirrors the existing exact-input case).",
-          "Accepts a shares input of exactly the int8 maximum (9223372036854775807) and stores it exactly in expense_split_input (the bound is above-max, not at-max)."
-        ],
-        "path": "tests/integration/expenses.test.ts"
-      }
-    ],
-    "understanding": "Issue #33 carries two review findings from PR #29: (1) a shares-split input has no int8 bound, so a count above 9223372036854775807 passes validation and explodes at the insert with a 500 instead of a field sentence — still true in src/app/actions/expenses.ts:304, which bounds only exact inputs; (2) tests/lib/money.test.ts gained benign unit coverage outside the work-order lists — still true, and needs no code change. This plan fixes (1) with the mirrored bound the review prescribes and drops (2) as recorded-but-benign.",
-    "version": 1
-  },
-  "approved_too_high": false
+  "approved_too_high": false,
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-10-02T22:40:44.769Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5962604905"
 }
