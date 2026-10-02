@@ -763,5 +763,8 @@
       "diagnosis": "The root-cause agent produced no output at all, and the red step is three steps downstream of that. It ran 110 turns for 27 minutes and $5.59 and wrote neither work-order.json nor stop.json — its only two Write calls went to /tmp/probe/t14.mjs and /tmp/probe/sweep.mjs, scratch files outside the repository that the upload path (work-order.json, stop.json, root-cause-transcript.json) never picks up, which is why the root-cause-output artifact is 421 bytes and holds only the transcript. The agent s",
       "run": "36976083170"
     }
-  ]
+  ],
+  "retry_after": "2026-10-02T11:32:36.550Z",
+  "retry_stage": "root-cause",
+  "parked_at": "2026-10-02T07:32:36.550Z"
 }
