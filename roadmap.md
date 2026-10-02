@@ -1,131 +1,72 @@
 # Roadmap
 
-Rebuilt 2026-10-02 from `maintainer/issues.json` (11 open), `maintainer/pulls.json` (1 open),
-`maintainer/closed.json` (0 closed). No `maintainer/roadmap.md` existed — this is the first one.
+Rebuilt 2026-10-02 from `maintainer/issues.json` (12 open, 0 untrusted), `maintainer/pulls.json` (2 open), `maintainer/closed.json` (3 closed recently). Previous survey's roadmap was `maintainer/roadmap.md`.
 
 ## Shipped
 
-**Nothing a person can use yet.** The repository has no application code: no `src/`, no `tests/`,
-and all four verbs in `package.json` (`sdlc:verify`, `sdlc:serve`, `sdlc:seed`, `sdlc:ready`) are
-`echo` stubs. What exists is the written product — `docs/prd.md`, `docs/trd.md` (TR-1..TR-27),
-`docs/ui.md`, `docs/spec/tabs.md`, eleven ADRs, `.sdlc/memory/project.md` — and the pipeline
-itself. That is the correct state for a project one day old; say it plainly rather than
-implying a partial product.
+What a person can do now that they could not before:
+
+- **Sign up, sign in, and stay signed in.** Email and password accounts with salted scrypt hashes, opaque httpOnly session cookies, sign-out that kills the session server-side, rate-limited sign-in, health endpoint backed by a real database query, and migrations that run on boot on either backend (PGlite locally, Neon with `DATABASE_URL`). The four pipeline verbs (`sdlc:verify`, `sdlc:serve`, `sdlc:seed`, `sdlc:ready`) are real in `package.json` for the first time. (Closed #3, plus its follow-ups #17.)
+- **Create a group, see who is in it, and manage membership.** Name, currency, optional type, exactly one owner; owner-only rename, remove, and archive; leave and remove guarded by a zero-balance precondition; a user sees only the groups they belong to. (Closed #4.)
 
 ## In flight
 
-- **#3 Stand up the app: database, migrations, health check and real accounts** — open PR #13 from
-  `sdlc/issue-3`, labelled `sdlc:qa`. This is the **head of the whole chain**: all ten other
-  children of #1 are parked behind it, and it is the piece that makes `sdlc:verify`, `sdlc:serve`
-  and `sdlc:ready` real for the first time. Nothing else in the product can start until it merges.
-  `ci-verify` fails any branch carrying code while `sdlc:verify` is still a stub, so this PR is
-  also where that gate is met or missed.
+- **#5 Invite people to a group, and let them claim a name before they sign up** — open PR #22 from `sdlc/issue-5`, labelled `sdlc:implementing`. This is the head of the remaining chain: #6 is parked on it.
+- **#20 Follow-ups from #4: 5 from the review** — open PR #21 from `sdlc/issue-20`, labelled `sdlc:needs-human`. Five non-blocking review findings from PR #19 (negative-sub-unit sign in `formatMinor`, `readMembers` two-step auth, RemoveButton and rename-form missing `router.refresh()`, one unlisted file in the work order). Nothing else in the product waits on it, but its `formatMinor` item bites as soon as #6/#8 render real balances.
+
+Everything else open behind the chain is parked, not stalled: #6 on #5; #7 and #8 on #6; #9 on #8; #10, #11, #12 on #9. #14 (Spec coverage) and #15 (pipeline self-fixes) are bookkeeping, not product work.
 
 ## Next
 
-1. **Land #3, then let #4 run.** The chain is strictly serial from #3 through #9, and #4 is the
-   first piece that defines group and membership data plus `src/lib/access.ts`, which every later
-   read copies. There is nothing worth deciding until the schema and the three real verbs exist.
-2. **Watch the one genuine fork after #6: #7 and #8 are independent of each other.** #7 (edit and
-   delete an expense) and #8 (balances and simplified debts) both depend on #6 and nothing else.
-   Everything else is a line. If the pipeline serialises these two for any reason, that is the
-   cheapest hour in the whole plan to recover — and worth watching, because they touch the same
-   money core from opposite ends.
-3. **#12's README half does not actually need #9.** #12 is parked on #9, but half of it —
-   documenting the environment variables the code reads — depends only on #3, which is where those
-   variables come into existence. If the deploy path matters sooner than the performance numbers,
-   the right move is a **re-split of #12**, not a new issue. The performance half (TR-25, p75
-   under one second against the production build) genuinely does need every screen, so it should
-   stay behind #9.
+1. **Land #5, then run #6.** #6 (record an expense: who paid, how it splits) defines the expense, payer, share, and split-input tables plus `src/lib/money.ts` — the schema and the remainder rule every later balance sums over. It is the largest work order in the split and the one the product's trustworthiness rests on, so it goes first even though it is the hardest.
+2. **Watch the fork after #6: #7 and #8 are independent of each other.** #7 (edit/delete an expense) and #8 (balances, simplified debts, home totals) both depend on #6 and nothing else, touching the same money core from opposite ends (write path vs read path). If the pipeline serialises them, that is the cheapest place in the plan to recover parallelism.
+3. **#11's seed unblocks QA auth, not just QA convenience.** Until #11 lands the fixed seed users, `qa_auth.mode: none` means QA can only drive signed-out paths through roughly eight PRs that look green. No reordering is proposed — #11 genuinely needs #9's payments and placeholders first — but the deploy-path half of #12 (env vars exist since #3) could be re-split forward if the human deploy matters sooner than the perf numbers, which need every screen.
 
 ## Blocked, and on whom
 
-None of these is agent work. All four are a person, and none can be filed as an issue because
-`.sdlc/config.yml` is a reserved path no ticket branch may edit.
+None of these is agent work. All are a person, and none can be filed as an issue because `.sdlc/config.yml` is a reserved path no ticket branch may edit.
 
-- **QA cannot test most of the product** — `qa_auth.mode` is `none` in `.sdlc/config.yml`, so QA
-  arrives signed out and can only drive sign-up and the signed-out screens. `fixture` is the right
-  setting and the config's own comment says it needs exactly what already holds (compose mode,
-  local-only allowlist) — but it only becomes *possible* when **#11** lands the seed's known-password
-  users. So between #4 and #11, roughly eight PRs get QA that cannot reach the money screens.
-  This is the single highest-value thing on this list, because it is invisible in the issue list:
-  those PRs look green. **On: the repository owner, after #11 merges.**
-- **No Vercel project and no Neon database exist.** Nothing deploys, and #12's deploy guide and its
-  Neon claims are proved by a human opening a preview, not by QA. #12 already states this plainly.
-  **On: the repository owner.**
-- **`env.mode: compose` versus `preview`** — compose proves the production build against local
-  PGlite and says nothing about the Neon path; preview proves Neon and needs a preview-scoped
-  `DATABASE_URL` that is never production. This changes what QA is able to conclude, not the
-  application. **On: the repository owner.**
-- **Which currencies must be supported at launch** — #4 assumes any ISO 4217 code formatted through
-  `Intl`. A fixed short list would close the picker and let the README say so. Not blocking #4,
-  because the assumption is written down; decide before #12. **On: the repository owner.**
+- **QA cannot test most of the product** — `qa_auth.mode` is `none`, so QA arrives signed out. `fixture` is the right setting (compose mode, local-only allowlist already hold), but it only becomes possible when **#11** lands the seed's known-password users. **On: the repository owner, after #11 merges.**
+- **No Vercel project and no Neon database exist.** Nothing deploys; #12's deploy guide and its Neon claims are proved by a human opening a preview, not by QA. **On: the repository owner.**
+- **`env.mode: compose` versus `preview`** — compose proves the production build against local PGlite and says nothing about the Neon path; preview proves Neon and needs a preview-scoped `DATABASE_URL` that is never production. **On: the repository owner.**
+- **Which currencies must be supported at launch** — #4 assumed any ISO 4217 code via `Intl`. A fixed short list would close the picker and let the README say so. Decide before #12. **On: the repository owner.**
+- **#15's refused self-fix waits on a secret** — the framework source could not be read without the `SDLC_FRAMEWORK_TOKEN` secret. **On: the repository owner.**
+- **#20 waits on a person by label** (`sdlc:needs-human`) while its PR #21 is open. **On: whoever triages the follow-up ticket.**
 
 ## Epics
 
-- **#1 Build Tabs from the spec (`docs/spec/tabs.md`)** — in flight, **0 of 10 children closed**.
-  Head is #3, with PR #13 open against it.
+- #1 Build Tabs from the spec (docs/spec/tabs.md) — in flight (2 of 10 children closed: #3, #4).
 
-Dependency graph between the open children, so the next run does not re-derive it:
+EPIC DEPENDENCY GRAPH (one line per open epic):
+
+- #1 waits on nothing; it is the only open epic, so there are no `epic_links`.
+
+Dependency graph between its open children, so the next run does not re-derive it:
 
 ```
-#3 ──▶ #4 ──▶ #5 ──▶ #6 ──┬──▶ #7  (edit/delete an expense)
-                          └──▶ #8 ──▶ #9 ──┬──▶ #10 (search, filters, activity)
-                                           ├──▶ #11 (seed)      [unblocks QA auth]
-                                           └──▶ #12 (README, deploy, perf)
+#5 (in flight, PR #22) ──▶ #6 ──┬──▶ #7 (edit/delete an expense)
+                                └──▶ #8 ──▶ #9 ──┬──▶ #10 (search, filters, activity)
+                                                 ├──▶ #11 (seed)      [unblocks QA auth]
+                                                 └──▶ #12 (README, deploy, perf)
+#20 (in flight, PR #21) — follow-up to closed #4, blocks nothing
 ```
-
-There is **one open epic**, so there are no `epic_links` — nothing to depend on anything else.
 
 ### Spec coverage
 
-**Every TR and every S- section is claimed.** TR-1..TR-27 are each covered by at least one child
-(#3 carries TR-10/11/12/20/21/22/24; #4 TR-1/12/13/17; #5 TR-14/15; #6 TR-2/3/5/17/23; #7 TR-4/17;
-#8 TR-6/8/9/13/16; #9 TR-7/17; #10 TR-18/19; #11 TR-26; #12 TR-22/25/27), and S-2..S-10 are each
-covered, with S-1 and S-11 carried by the epic itself. **No uncovered spec remains**, so there is
-nothing for a Spec coverage issue to say, and none is filed. When the last child of #1 closes,
-#1 closes with nothing dropped.
+#14 (Spec coverage) reports 11 sections: 0 built, 8 in flight, 2 not started, 1 non-goal, 0 uncovered. Its per-section table still names closed #3/#4 as "in flight" — bookkeeping lag after this week's merges, not a defect to file. Substance: **every TR-1..TR-27 is claimed** by at least one open or recently closed child, and S-2..S-10 are each carried, with S-1 and S-11 carried by the epic itself. **No uncovered spec remains**, so no Spec coverage issue is filed. When the last child of #1 closes, #1 closes with nothing dropped.
 
 ## Notes for the next run
 
-- **Zero `untrusted` issues** in this survey's input. All 11 open issues are the pipeline's own.
-- **Issue #2 is not open and not in the last-30 closed list.** It was the project/architecture
-  ticket, merged as PR #2. Nothing is waiting on it.
-- **The issue bodies are numbered two behind their issue numbers.** Every body refers to "piece N"
-  where piece N is issue **N+2** — piece 5 is #7, piece 6 is #8, piece 7 is #9, piece 8 is #10. The
-  `Depends on #N` lines are correct and use real numbers; only the prose is off by two. It is
-  harmless when read carefully and misleading when skimmed, and it is not fixable by filing: the
-  pipeline cannot rewrite a parked issue's body from a survey. Read `Depends on:` first and ignore
-  "piece N" in the prose.
-- **The decision recorded on #1 has landed in the docs**, and is worth confirming rather than
-  assuming on any future run: TR-4 in `docs/trd.md` now carries the edit-and-delete rule, the
-  expense form in `docs/ui.md` describes the edit reopening from the stored rule, and ADR-0011
-  records the split rule stored beside its shares. A search for the pre-decision wording ("an edit
-  never changes a balance") finds it nowhere but in #7's own body, where it is quoted as the stale
-  text to be ignored. Any future copy of that sentence outside #7 is drift and should be reported.
-- **`.sdlc/memory/project.md` is already stale in a way that resolves itself.** It says "Nothing
-  here runs yet: the repository has no code" and lists all four verbs as stubs; #3 makes three of
-  them real. That is the Librarian's file and it is updated nightly from what merged — do not file
-  an issue about it. `.sdlc/memory/qa/environment.md` and `qa/selectors.md` are still stubs for the
-  same reason.
+- **Zero `untrusted` issues** in this survey's input. All 12 open issues are the pipeline's own.
+- **The issue bodies are numbered two behind their issue numbers.** Every body refers to "piece N" where piece N is issue **N+2**. The `Depends on #N` lines use real numbers and are correct; only the prose is off by two. Not fixable by filing: parked bodies cannot be rewritten from a survey. Read `Depends on:` first.
+- **The decision recorded on #1 has landed in the docs.** TR-4 carries the edit-and-delete rule, the expense form in `docs/ui.md` reopens from the stored rule, ADR-0011 records the split rule stored beside its shares. A copy of the pre-decision sentence outside #7's quoted stale text is drift — report it if seen.
+- **`.sdlc/memory/project.md` is stale in the known way.** It still says no code exists and all verbs are stubs; `src/` exists and three verbs are real since #3. The Librarian updates it nightly from what merged — do not file an issue about it. Same for any QA-memory stubs.
+- **#20's items must be checked for reproduction before planning.** They were written against PR #19 as it stood; a later round may have fixed one. Drop what does not reproduce rather than implementing what was never wrong.
 
 ## What this survey considered and did not file
 
-Recorded so the next run does not re-derive them and file them as if they were new.
+Recorded so the next run does not re-derive them and file them as if new.
 
-- **A cross-piece test for "the ledger never drifts"** (record → edit → pay → delete → balances
-  return to zero, driven as one flow). Tempting, and it is the kind of gap that becomes real
-  around #9. But each seam is already owned: #6 property-tests the split sum over 10,000 random
-  totals, #7 AC-8 asserts a rounding-rule change leaves stored balances byte-identical, #8 AC-4
-  asserts a balance is a sum of stored rows, #9 AC-4 asserts a deleted payment restores exactly
-  what it moved. A test spanning all four would mostly re-run those against the current code. If a
-  piece is ever cut for time and drops its own invariant test, that is when this becomes worth
-  filing — named at that point, not now.
-- **A warning about the write-path-only split function being called on a read path** — this is the
-  sharpest hazard in the money core, since #6 writes the rule-to-share function, #7 re-runs it on
-  edit, and #8 reads balances and must not. But #8's body and AC-4 already name it in exactly those
-  words, and ADR-0011 exists. Restating it as an issue would be noise on top of a warning already
-  at the point of danger.
-- **An issue to fix the piece-numbering drift above** — unfillable in principle. The pipeline cannot
-  rewrite a parked issue's body, and a ticket whose deliverable is a change to `.sdlc/memory/` may
-  not be filed at all. It lives here instead, which is where the next run reads it.
+- **A cross-piece "ledger never drifts" test** (record → edit → pay → delete → balances return to zero). Each seam is already owned: #6 property-tests the split sum, #7 asserts a rounding-rule change leaves stored balances byte-identical, #8 asserts a balance is a sum of stored rows, #9 asserts a deleted payment restores exactly what it moved. Revisit only if a piece drops its invariant test.
+- **A warning that the write-path-only split function must never run on a read path.** #8's body and AC-4 already name it, and ADR-0011 exists. Restating it would be noise at the point of danger.
+- **Fixing the piece-numbering drift or the stale memory notes.** Unfillable in principle: parked bodies cannot be rewritten, and no ticket may deliver a change to `.sdlc/memory/`.
