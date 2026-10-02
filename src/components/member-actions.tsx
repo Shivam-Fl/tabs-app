@@ -21,17 +21,34 @@ function useMemberAction(
 ) {
   const formRef = useRef<HTMLFormElement>(null);
   const [open, setOpen] = useState(false);
-  const [state, formAction, pending] = useActionState<MemberResult | null, FormData>(action, null);
 
-  // Through a ref so the effect runs on the RESULT and not on every render, which would
-  // navigate once per re-render for as long as the result stays the same.
+  // Through a ref so the continuation calls the latest onSuccess without the wrapped action
+  // having to be rebuilt (or the callback re-run) whenever the caller passes a new closure.
   const onSuccessRef = useRef(onSuccess);
   useEffect(() => {
     onSuccessRef.current = onSuccess;
   });
-  useEffect(() => {
-    if (state?.ok) onSuccessRef.current(state.groupId);
-  }, [state]);
+
+  /**
+   * The success callback runs in the AWAITED CONTINUATION of the action, not in an effect on the
+   * action state, and the difference is the whole bug. Leaving revalidates the members page, and
+   * the caller is no longer a member, so that page resolves to notFound and unmounts this
+   * control in the SAME commit that delivers the result — the state update and any effect on it
+   * go with the unmount, and the navigation never happens. A pending promise is not part of the
+   * tree: nothing unmounts it, so the continuation still runs and the "You left Lisbon · Undo"
+   * notice is reachable, which is the only affordance for an undoable action.
+   *
+   * It is the bug class src/components/join-screen.tsx documents, and it cannot be fixed the way
+   * that screen fixes it: TR-1 requires a non-member to get the not-found page rather than a
+   * list confirming the group exists, so the navigation must not depend on staying mounted.
+   */
+  const wrapped = async (previous: MemberResult | null, formData: FormData) => {
+    const result = await action(previous, formData);
+    if (result.ok) onSuccessRef.current(result.groupId);
+    return result;
+  };
+
+  const [state, formAction, pending] = useActionState<MemberResult | null, FormData>(wrapped, null);
 
   return { formRef, open, setOpen, state, formAction, pending };
 }

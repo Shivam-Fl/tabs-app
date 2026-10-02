@@ -25,7 +25,26 @@ export function GroupList({
   leftGroupId: string | null;
   leftGroupName: string | null;
 }) {
-  if (groups.length === 0) return <HomeEmpty />;
+  /**
+   * Only when the server resolved a name, which is only for the caller's own leave inside the
+   * last ten seconds. A bare / and a stale ?left= both render nothing.
+   *
+   * Above BOTH branches, including the empty one: the group somebody just left is often the only
+   * group they were in — a person's first invite, which is exactly what docs/ui.md's leaving
+   * example describes — and returning HomeEmpty alone would take the notice, the only Undo
+   * affordance for a reversible action, with it. HomeEmpty's h1 is still the only one either way.
+   */
+  const notice =
+    leftGroupId && leftGroupName ? <LeaveNotice groupId={leftGroupId} groupName={leftGroupName} /> : null;
+
+  if (groups.length === 0) {
+    return (
+      <div className="flex flex-col gap-space-6">
+        {notice}
+        <HomeEmpty />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-space-6">
@@ -34,11 +53,7 @@ export function GroupList({
         <LinkButton href="/groups/new">Create group</LinkButton>
       </div>
 
-      {/* Only when the server resolved a name, which is only for the caller's own leave inside
-          the last ten seconds. A bare / and a stale ?left= both render nothing. */}
-      {leftGroupId && leftGroupName ? (
-        <LeaveNotice groupId={leftGroupId} groupName={leftGroupName} />
-      ) : null}
+      {notice}
 
       <ul className="flex flex-col">
         {groups.map((group) => (

@@ -713,6 +713,15 @@ export async function removeMemberAsOwner(
  * query — applied to the one shape a Drizzle `where` cannot express, which is why these two are
  * the only statements in src/ built from raw SQL. What decides the result is the length of the
  * rows the `returning` clause hands back.
+ *
+ * The `on conflict` is the backstop the `where not exists` cannot be. Both statements read the
+ * same snapshot, so under READ COMMITTED two OVERLAPPING confirms can both pass the predicate —
+ * the loser then reaches members_group_user_active_idx with its row already written and raises a
+ * unique violation, which the caller surfaces as a 500. Naming that index's own predicate as the
+ * conflict target makes the loser take the same empty-`returning` no-op the sequential second
+ * confirm already takes, so both racers answer success with exactly one row and one feed entry.
+ * The predicate has to match the index exactly: a partial unique index is inferable only when
+ * the clause repeats it, and a mismatch raises at runtime instead of doing nothing.
  */
 export async function joinGroupIfAbsent(tx: Tx, groupId: string, userId: string): Promise<string | null> {
   const memberId = randomUUID();
@@ -723,6 +732,7 @@ export async function joinGroupIfAbsent(tx: Tx, groupId: string, userId: string)
       select 1 from ${members}
       where group_id = ${groupId}::uuid and user_id = ${userId}::uuid and removed_at is null
     )
+    on conflict (group_id, user_id) where user_id is not null and removed_at is null do nothing
     returning id
   `);
 
