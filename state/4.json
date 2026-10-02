@@ -752,5 +752,30 @@
   "work_order_posted_at": "2026-10-02T14:48:14.087Z",
   "work_order_from": "plan",
   "work_order_comment": "5954965045",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "follow_ups": {
+    "review": [
+      {
+        "title": "formatMinor drops the minus sign for negative amounts smaller than one major unit: formatMinor(-5n, 'EUR') renders '€0.05' instead of '-€0.05'.",
+        "detail": "formatMinor drops the minus sign for negative amounts smaller than one major unit: formatMinor(-5n, 'EUR') renders '€0.05' instead of '-€0.05'.\n\n`src/lib/money.ts:43`\n\nEvidence: Executed the shipped algorithm in node: -5n->'€0.05', -1n->'€0.01', -99n->'€0.99' (all wrong sign); -100n->'-€1.00' and -1234n->'-€12.34' (correct). Root cause at line 43: whole is -(absolute/scale), and when absolute<scale the quotient is 0n with -0n===0n, so formatToParts(0n) emits no minus. tests/lib/money.test.ts asserts only -1234n, so the suite passes on the buggy code. All current call sites pass literal 0n, so nothing renders wrong yet; the bug bites when #6/#8 render real balances through this function.\n\nFix: Carry the sign outside the whole part: format the absolute whole and re-apply the locale minus sign when the input was negative, and add a case asserting formatMinor(-5n,'EUR')==='-€0.05'."
+      },
+      {
+        "title": "readMembers authorises by a separate readMembership check followed by an unjoined fetch, the one reader in access.ts that does not express the membership join inside the query that returns the data.",
+        "detail": "readMembers authorises by a separate readMembership check followed by an unjoined fetch, the one reader in access.ts that does not express the membership join inside the query that returns the data.\n\n`src/lib/access.ts:160`\n\nEvidence: src/lib/access.ts:160-161 gates on readMembership then selects from members+users filtered only by groupId. Every sibling reader carries the membership join in the fetching query, and the module docstring claims no function takes a group id and returns data without the join. Practical risk negligible (read-only); non-members still get null.\n\nFix: Express the member-list read as a membership join like readGroup does, or record why the two-step form is acceptable."
+      },
+      {
+        "title": "RemoveButton does nothing on success: the removed member stays listed with a live Remove button until a manual reload.",
+        "detail": "RemoveButton does nothing on success: the removed member stays listed with a live Remove button until a manual reload.\n\n`src/components/member-actions.tsx:82`\n\nEvidence: member-actions.tsx:82 passes an empty onSuccess callback to useMemberAction and calls no router.refresh(), unlike LeaveButton (router.push to /?left=) and ArchiveButton (router.refresh() with a comment stating revalidation alone does not update the screen). A second click on the stale Remove button submits against an already-removed row and surfaces 'That member could not be removed.' The server write itself is correct and integration-tested.\n\nFix: On state.ok call router.refresh() and render an in-place confirmation, mirroring ArchiveButton."
+      },
+      {
+        "title": "After a successful rename the form says 'Saved.' but the server-rendered name around it (members back-link, group-name paragraph) keeps the old name until reload.",
+        "detail": "After a successful rename the form says 'Saved.' but the server-rendered name around it (members back-link, group-name paragraph) keeps the old name until reload.\n\n`src/components/rename-group-form.tsx:47`\n\nEvidence: rename-group-form.tsx has no router and performs no refresh on state.ok; the action's revalidatePath purges the server cache but does not re-render the current page (ArchiveButton's comment states this explicitly, which is why it calls router.refresh()). The work order qa_script step 5 requires the h1, members back-link and home row to update on rename.\n\nFix: Call router.refresh() when state.ok arrives so the surrounding server components re-render, as ArchiveButton does."
+      },
+      {
+        "title": "src/components/archive-button.tsx (+58) is in the PR diff but in none of work-order.json files[]' 34 entries, the only such file.",
+        "detail": "src/components/archive-button.tsx (+58) is in the PR diff but in none of work-order.json files[]' 34 entries, the only such file.\n\n`src/components/archive-button.tsx:1`\n\nEvidence: Programmatic set-diff of `gh pr diff 19 --name-only` against work-order files[]: PR-only = {src/components/archive-button.tsx}, work-order-only = {}. The archive control's behavior is planned (members-screen.tsx files[] entry describes the owner-only rename+archive section, and members-screen.tsx imports and renders ArchiveButton), so no unreviewed behavior ships; but the file itself was never in the reviewed plan.\n\nFix: List the file in files[] with its owner-only archive-control change, or fold the component into members-screen.tsx."
+      }
+    ],
+    "pr": "19"
+  }
 }
