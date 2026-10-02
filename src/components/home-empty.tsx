@@ -7,8 +7,9 @@ import { LinkButton } from '@/components/ui';
  * Synchronous and presentational, for the same reason as the shell — the page that renders it
  * cannot be imported by a test, because importing it would construct a real database.
  *
- * There are no groups yet and no group table, so this renders no query at all. "Create group"
- * links to a screen piece 2 builds; the ticket's own wording requires the action to be here.
+ * It now renders for an EMPTY list rather than unconditionally: the query lives in the page,
+ * which hands the result to GroupList, and this is the branch GroupList takes when the caller
+ * is in no groups. The markup and the h1 are unchanged, because this copy is docs/ui.md's.
  */
 export function HomeEmpty() {
   return (
