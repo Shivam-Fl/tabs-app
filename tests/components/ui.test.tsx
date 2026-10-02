@@ -288,18 +288,37 @@ describe('the touch-target markup, which jsdom cannot measure', () => {
     expect(skipLink.className).not.toMatch(/focus:absolute|focus:left-space-|focus:top-space-/);
   });
 
-  it('a one-word display name is capped, truncated and shrinkable', () => {
-    render(<TopBar user={{ displayName: 'Wolfeschlegelsteinhausenbergerdorffenfun' }} />);
+  it('a one-word display name is truncated, not capped, and the name is the only item that shrinks', () => {
+    render(
+      <Shell user={{ displayName: 'Wolfeschlegelsteinhausenbergerdorffenfun' }}>
+        <main />
+      </Shell>,
+    );
 
-    // All three are needed and none alone is enough: the span is what makes the ellipsis
-    // render (text-overflow does not reliably apply to a flex container's own text), the
-    // max-width is what bounds the item's min-content contribution, and min-w-0 on the nav
-    // is what lets the row shrink at all.
+    // Shell, not TopBar alone: the sign-out form the last assertion looks for lives in
+    // shell.tsx, and one composition covers all five.
+    //
+    // The name link carries no fixed ceiling. A max-w-[120px] here was BUG-4: it truncated a
+    // 29-character ordinary name on a 1280px header with 1160px free, because a ceiling
+    // applies at every viewport rather than only where the bar is tight. Nothing measures
+    // that here — AC-15 does, in a browser — but the ceiling is a class name, and jsdom can
+    // see a class name, so this is the permanent guard against one coming back.
     const nameLink = screen.getByRole('link', { name: 'Wolfeschlegelsteinhausenbergerdorffenfun' });
-    expect(nameLink.className).toContain('max-w-[120px]');
+    expect(nameLink.className).not.toMatch(/max-w-\[\d/);
+
+    // The ellipsis still has to be reachable when there genuinely is no room: the span is
+    // what makes it render, because text-overflow does not reliably apply to a flex
+    // container's own text, and min-w-0 on the nav is what lets the row shrink at all.
     expect(within(nameLink).getByText('Wolfeschlegelsteinhausenbergerdorffenfun').className).toContain(
       'truncate',
     );
     expect(document.querySelector('nav')?.className).toContain('min-w-0');
+
+    // With no ceiling, flexbox shrinks every item in proportion, and at 360px the sign-out
+    // control falls to 50.91px against its own 66.19px label. Pinning the siblings is what
+    // makes the name the only thing that gives ground. On the sign-out <form>, not the
+    // <button> inside it: the form is the nav's flex item.
+    expect(screen.getByRole('link', { name: 'Groups' }).className).toContain('shrink-0');
+    expect(document.querySelector('nav form')?.className).toContain('shrink-0');
   });
 });

@@ -21,18 +21,22 @@ export function TopBar({
         Tabs
       </Link>
       <nav aria-label="Main" className="flex min-w-0 items-center gap-space-3">
-        <Link href="/" className="min-h-[44px] leading-[44px] text-base">
+        <Link href="/" className="shrink-0 min-h-[44px] leading-[44px] text-base">
           Groups
         </Link>
         {/* The display name is user-supplied, so its width is not knowable here: "Jo" renders
             15px wide and "Priya" 40px, both under the 44px minimum, and a legal one-word name
             renders 318px and pushes the page sideways. Same three utilities as the brand link
-            for the same reason — min-width has to be asserted, not assumed — plus a ceiling:
-            the span is what makes the ellipsis render, and the max-width is what bounds this
-            item's min-content contribution, without which the row cannot shrink at all. */}
+            for the same reason — min-width has to be asserted, not assumed. Three classes do
+            the layout and each is load-bearing: the span makes the ellipsis render,
+            min-w-0 on the nav is what lets the row shrink below its content, and shrink-0 on
+            the siblings keeps that shrink coming from the name alone. A fixed max-width here
+            was BUG-4 — it truncated an ordinary 29-character name on a 1280px header with
+            1160px free, because a ceiling applies at every viewport rather than only where the
+            bar is tight, and the row shrinks fine without it. */}
         <Link
           href="/settings"
-          className="inline-flex min-h-[44px] min-w-[44px] max-w-[120px] items-center text-base"
+          className="inline-flex min-h-[44px] min-w-[44px] items-center text-base"
         >
           <span className="truncate">{user.displayName}</span>
         </Link>

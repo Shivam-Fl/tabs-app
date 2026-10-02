@@ -30,7 +30,7 @@ export function Shell({ user, children }: { user: { displayName: string }; child
  */
 function SignOutControl() {
   return (
-    <form action={signOut}>
+    <form action={signOut} className="shrink-0">
       <button
         type="submit"
         className="min-h-[44px] px-space-2 text-base text-text-muted transition-colors duration-150 hover:text-text"
