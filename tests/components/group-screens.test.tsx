@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { archiveGroup } from '@/app/actions/groups';
+import { archiveGroup, renameGroup } from '@/app/actions/groups';
+import { removeMember } from '@/app/actions/members';
 import { GroupList } from '@/components/group-list';
 import { GroupOverview } from '@/components/group-overview';
 import { MembersScreen } from '@/components/members-screen';
@@ -21,11 +22,20 @@ vi.mock('@/app/actions/groups', () => ({
   renameGroup: vi.fn(),
   archiveGroup: vi.fn(),
 }));
+// One shared router for the whole file, so an assertion observes the SAME fns the components
+// called. A fresh { push: vi.fn(), refresh: vi.fn() } per useRouter() call is what the old mock
+// returned, and it makes every refresh assertion vacuous: it can only ever see a spy nobody used.
+const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
 vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => router,
 }));
 
 afterEach(cleanup);
+
+beforeEach(() => {
+  router.push.mockClear();
+  router.refresh.mockClear();
+});
 
 const group: GroupRow = {
   id: '6b1f2f9c-0f1a-4a4f-9d1f-2f0a6c7b8d90',
@@ -157,6 +167,44 @@ describe('the members screen', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('confirms a removal in place and refreshes the list, leaving no live Remove button', async () => {
+    vi.mocked(removeMember).mockResolvedValue({ ok: true, groupId: group.id });
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove Sam' }));
+
+    // The confirmation is inserted as the action resolves — a live region, so the removal is
+    // announced and not merely visible — while the refresh is what drops the row underneath it.
+    // Both are waited on together: the refresh is requested from a passive effect, and a
+    // MutationObserver-driven wait can see the status in the DOM a tick before that effect runs.
+    // Retrying costs nothing here and still fails if refresh is never called at all.
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Removed Sam.');
+      expect(router.refresh).toHaveBeenCalled();
+    });
+    // Sam's row is the server's to remove, but until the refresh lands the button that just
+    // removed him must not submit a second removal.
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
+  });
+
+  it('refreshes the server-rendered name around the form after a rename, alongside Saved.', async () => {
+    vi.mocked(renameGroup).mockResolvedValue({ ok: true, groupId: group.id });
+    render(<MembersScreen group={group} members={[owner]} viewer={ownerView} />);
+
+    fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Lisbon, April' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+    // revalidatePath in the action invalidates the cache; what re-renders the back-link, the
+    // paragraph under the heading and the home row is this refresh, and without it they keep the
+    // old name until somebody reloads by hand. Waited on with the message, for the same
+    // passive-effect reason as the removal case above.
+    await waitFor(() => {
+      expect(screen.getByRole('status')).toHaveTextContent('Saved.');
+      expect(router.refresh).toHaveBeenCalled();
+    });
   });
 
   it('confirms a leave in a dialog that names the group', () => {

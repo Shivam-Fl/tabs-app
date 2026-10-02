@@ -79,13 +79,28 @@ export function RemoveButton({
   memberId: string;
   memberName: string;
 }) {
+  const router = useRouter();
   const { formRef, open, setOpen, state, formAction, pending } = useMemberAction(removeMember, () => {
-    // No navigation: the removal happened on this screen, so this screen is where it shows.
+    // No navigation: the removal happened on this screen, so this screen is where it shows — the
+    // confirmation below lands the moment the action resolves, and the refresh drops the row
+    // from the server-rendered list underneath it.
+    router.refresh();
   });
+  const removed = Boolean(state?.ok);
 
   return (
     <>
-      <Button variant="secondary" onClick={() => setOpen(true)} disabled={pending} busyLabel="Removing…">
+      {/*
+        busyLabel only while the action is in flight: Button renders it in place of the children
+        for the whole time it is disabled, so leaving it on after a successful removal would read
+        'Removing…' for good over a button that has finished.
+      */}
+      <Button
+        variant="secondary"
+        onClick={() => setOpen(true)}
+        disabled={pending || removed}
+        busyLabel={pending ? 'Removing…' : undefined}
+      >
         Remove
       </Button>
       <Dialog
@@ -103,6 +118,14 @@ export function RemoveButton({
         <input type="hidden" name="groupId" value={groupId} />
         <input type="hidden" name="memberId" value={memberId} />
       </form>
+      {/* The in-place confirmation docs/ui.md asks for after a removal the person cannot see
+          happen otherwise. It is announced as it is inserted; the row leaving the refreshed list
+          is what stays true if the announcement is missed. */}
+      {removed ? (
+        <p role="status" className="text-sm text-positive">
+          Removed {memberName}.
+        </p>
+      ) : null}
       {state?.formError ? (
         <p role="alert" className="text-sm text-negative">
           {state.formError}
