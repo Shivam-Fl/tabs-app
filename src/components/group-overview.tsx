@@ -96,16 +96,27 @@ export function GroupOverview({
   );
 }
 
-/** One feed entry in a sentence. The kinds are this piece's six, and no others exist yet. */
+/**
+ * One feed entry in a sentence. The Record is exhaustive over ActivityKind on purpose: adding a
+ * kind without a sentence for it is a compile error, not a row that renders as "undefined".
+ *
+ * The four invite and placeholder kinds are described even though the overview's recent block
+ * filters the group.* ones out — a member.placeholder_added and a member.claimed do reach it,
+ * and an entry the reader cannot parse is worse than no feed.
+ */
 function describe(entry: ActivityRow): string {
   const who = entry.actorName ?? 'Somebody';
   const what: Record<ActivityRow['kind'], string> = {
     'group.created': 'created the group',
     'group.renamed': 'renamed the group',
     'group.archived': 'archived the group',
+    'group.invite_rotated': 'made a new invite link',
+    'group.invite_disabled': 'turned the invite link off',
     'member.joined': 'joined the group',
     'member.left': 'left the group',
     'member.removed': 'was removed from the group',
+    'member.placeholder_added': 'was added to the group by name',
+    'member.claimed': 'claimed their place in the group',
   };
   return `${who} ${what[entry.kind]}`;
 }

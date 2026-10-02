@@ -6,7 +6,7 @@ import { archiveGroup } from '@/app/actions/groups';
 import { GroupList } from '@/components/group-list';
 import { GroupOverview } from '@/components/group-overview';
 import { MembersScreen } from '@/components/members-screen';
-import type { ActivityRow, GroupRow, GroupSummary, MemberRow, Membership } from '@/lib/access';
+import type { ActivityRow, GroupRow, GroupSummary, InviteRow, MemberRow, Membership } from '@/lib/access';
 
 // MembersScreen renders the leave and remove controls, and the owner section renders the rename
 // form and the archive control — all of which import Server Actions, which import the database.
@@ -15,6 +15,11 @@ vi.mock('@/app/actions/members', () => ({
   leaveGroup: vi.fn(),
   undoLeave: vi.fn(),
   removeMember: vi.fn(),
+  joinWithToken: vi.fn(),
+  addPlaceholderMember: vi.fn(),
+  claimPlaceholder: vi.fn(),
+  rotateInviteLink: vi.fn(),
+  setInviteEnabled: vi.fn(),
 }));
 vi.mock('@/app/actions/groups', () => ({
   createGroup: vi.fn(),
@@ -35,8 +40,22 @@ const group: GroupRow = {
   archivedAt: null,
 };
 
-const owner: MemberRow = { memberId: 'm-owner', displayName: 'Priya', isOwner: true, balanceMinor: 0n };
-const other: MemberRow = { memberId: 'm-other', displayName: 'Sam', isOwner: false, balanceMinor: 0n };
+const owner: MemberRow = {
+  memberId: 'm-owner',
+  displayName: 'Priya',
+  isOwner: true,
+  isPlaceholder: false,
+  balanceMinor: 0n,
+};
+const other: MemberRow = {
+  memberId: 'm-other',
+  displayName: 'Sam',
+  isOwner: false,
+  isPlaceholder: false,
+  balanceMinor: 0n,
+};
+
+const invite: InviteRow = { token: 'tok-abc123', enabled: true };
 
 const ownerView: Membership = { memberId: owner.memberId, groupId: group.id, userId: 'u-owner', isOwner: true };
 const memberView: Membership = { memberId: other.memberId, groupId: group.id, userId: 'u-other', isOwner: false };
@@ -89,7 +108,7 @@ describe('the group overview', () => {
 
 describe('the members screen', () => {
   it('has exactly one h1 and lists every member with their role', () => {
-    const { container } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    const { container } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
 
     expect(h1s(container)).toHaveLength(1);
     expect(h1s(container)[0]?.textContent).toBe('Members');
@@ -100,7 +119,7 @@ describe('the members screen', () => {
   });
 
   it('gives the owner the owner-only controls and no Leave, and the plain member none of them', () => {
-    const { unmount } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    const { unmount } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
     expect(screen.getByRole('heading', { name: 'Rename' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Archive' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Archive Lisbon' })).toBeInTheDocument();
@@ -108,27 +127,27 @@ describe('the members screen', () => {
     expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
     unmount();
 
-    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} invite={invite} />);
     expect(screen.queryByRole('heading', { name: 'Rename' })).not.toBeInTheDocument();
     expect(screen.queryByRole('heading', { name: 'Archive' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
   });
 
   it('puts Remove on the other member’s row, and Leave only on the viewer’s own', () => {
-    const { unmount } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    const { unmount } = render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
     // The owner sees Remove against Sam, one row, and never against their own.
     expect(screen.getAllByRole('button', { name: 'Remove' })).toHaveLength(1);
     expect(screen.getByText('Sam').closest('li')).toContainElement(screen.getByRole('button', { name: 'Remove' }));
     unmount();
 
-    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} invite={invite} />);
     expect(screen.getAllByRole('button', { name: 'Leave' })).toHaveLength(1);
     expect(screen.getByText('Sam').closest('li')).toContainElement(screen.getByRole('button', { name: 'Leave' }));
   });
 
   it('announces a finished archive instead of claiming to still be working', async () => {
     vi.mocked(archiveGroup).mockResolvedValue({ ok: true, groupId: group.id });
-    render(<MembersScreen group={group} members={[owner]} viewer={ownerView} />);
+    render(<MembersScreen group={group} members={[owner]} viewer={ownerView} invite={invite} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Archive Lisbon' }));
 
@@ -140,13 +159,13 @@ describe('the members screen', () => {
   });
 
   it('tells the owner to archive rather than leave, and offers no way out', () => {
-    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
     expect(screen.getByText(/archive it/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
   });
 
   it('confirms a removal in a dialog that names the member, and Escape dismisses it', () => {
-    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
 
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
@@ -160,7 +179,7 @@ describe('the members screen', () => {
   });
 
   it('confirms a leave in a dialog that names the group', () => {
-    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} invite={invite} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Leave' }));
 

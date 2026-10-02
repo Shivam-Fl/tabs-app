@@ -62,9 +62,36 @@ const displayNameSchema = z
   .min(1, 'Enter a name to show to your groups.')
   .max(80, 'That name is too long.');
 
-const signUpSchema = z.object({ displayName: displayNameSchema, email: emailSchema, password: passwordSchema });
+/**
+ * Where to go once the account exists or the password checks out. An invite link is the reason
+ * this exists: somebody opens /join/<token> signed out, is sent here to sign in or sign up, and
+ * has to come back to the invite rather than to an empty home screen.
+ *
+ * Only ever a path within this app. A leading single slash, and explicitly not `//host` or
+ * `/\host` — a browser reads both of those as a different origin, which is the open redirect
+ * this is here to prevent. `catch` rather than a form error, because a bad destination is not
+ * the person's mistake to fix and refusing the sign-in over it would be a worse failure than
+ * landing on the home screen.
+ */
+const nextSchema = z
+  .string()
+  .trim()
+  .max(512)
+  .regex(/^\/(?![/\\])/)
+  .catch('/');
 
-const signInSchema = z.object({ email: emailSchema, password: z.string().min(1, 'Enter your password.') });
+const signUpSchema = z.object({
+  displayName: displayNameSchema,
+  email: emailSchema,
+  password: passwordSchema,
+  next: nextSchema,
+});
+
+const signInSchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, 'Enter your password.'),
+  next: nextSchema,
+});
 
 function fieldErrorsFrom(error: z.ZodError): AuthFieldErrors {
   const errors: AuthFieldErrors = {};
@@ -124,10 +151,11 @@ export async function signUp(_previous: AuthResult | null, formData: FormData): 
     displayName: formData.get('displayName'),
     email: formData.get('email'),
     password: formData.get('password'),
+    next: formData.get('next'),
   });
   if (!parsed.success) return { ok: false, fieldErrors: fieldErrorsFrom(parsed.error) };
 
-  const { displayName, email, password } = parsed.data;
+  const { displayName, email, password, next } = parsed.data;
   const db = await database();
 
   // A nicety, for the message only. The insert below is the guarantee: a read-then-insert is
@@ -150,7 +178,7 @@ export async function signUp(_previous: AuthResult | null, formData: FormData): 
   }
 
   await createSession(createdId);
-  return { ok: true, redirectTo: '/' };
+  return { ok: true, redirectTo: next };
 }
 
 /**
@@ -169,10 +197,14 @@ export async function signUp(_previous: AuthResult | null, formData: FormData): 
  * return the identical result object and therefore the identical rendered message.
  */
 export async function signIn(_previous: AuthResult | null, formData: FormData): Promise<AuthResult> {
-  const parsed = signInSchema.safeParse({ email: formData.get('email'), password: formData.get('password') });
+  const parsed = signInSchema.safeParse({
+    email: formData.get('email'),
+    password: formData.get('password'),
+    next: formData.get('next'),
+  });
   if (!parsed.success) return { ok: false, fieldErrors: fieldErrorsFrom(parsed.error) };
 
-  const { email, password } = parsed.data;
+  const { email, password, next } = parsed.data;
   const db = await database();
 
   // Null means no address could be determined, which is what happens on every loopback boot:
@@ -199,7 +231,7 @@ export async function signIn(_previous: AuthResult | null, formData: FormData): 
   await recordAttempt(email, address, true);
   await clearFailures(email);
   await createSession(user.id);
-  return { ok: true, redirectTo: '/' };
+  return { ok: true, redirectTo: next };
 }
 
 export async function signOut(): Promise<void> {

@@ -20,8 +20,14 @@ import { Button, Card, Field } from '@/components/ui';
  * It imports from src/components/ui and nothing from src/db or src/lib/auth, as
  * conventions.md requires of a Client Component.
  */
-export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
+export function AuthForm({ mode, next }: { mode: 'sign-in' | 'sign-up'; next?: string }) {
   const router = useRouter();
+  // Carried across to the other form, encoded: somebody who lands on the wrong one of these
+  // two should not lose the invite they were on their way to by clicking the cross-link. The
+  // value is whatever arrived in the query string; the action decides if it is a destination
+  // this app is allowed to honour, and this only ever puts it back in a query string.
+  const otherMode = mode === 'sign-up' ? '/sign-in' : '/sign-up';
+  const crossHref = next ? `${otherMode}?next=${encodeURIComponent(next)}` : otherMode;
   const action = mode === 'sign-up' ? signUp : signIn;
   const [state, formAction, pending] = useActionState<AuthResult | null, FormData>(action, null);
 
@@ -47,6 +53,10 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
     <Card className="w-full max-w-[360px]">
       <h1 className="text-2xl">{mode === 'sign-up' ? 'Create your account' : 'Sign in'}</h1>
       <form ref={formRef} action={formAction} className="mt-space-4 flex flex-col gap-space-3" noValidate>
+        {/* Where to land once this succeeds. Travels in the body so the no-JS submit carries it
+            too, and non-submitters do not need it: the action falls back to the home screen. */}
+        {next ? <input type="hidden" name="next" value={next} /> : null}
+
         {mode === 'sign-up' ? (
           <Field
             name="displayName"
@@ -101,14 +111,14 @@ export function AuthForm({ mode }: { mode: 'sign-in' | 'sign-up' }) {
         {mode === 'sign-up' ? (
           <>
             Already have an account?{' '}
-            <a href="/sign-in" className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
+            <a href={crossHref} className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
               Sign in
             </a>
           </>
         ) : (
           <>
             New here?{' '}
-            <a href="/sign-up" className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
+            <a href={crossHref} className="inline-flex min-h-[44px] min-w-[44px] items-center text-primary underline">
               Create an account
             </a>
           </>

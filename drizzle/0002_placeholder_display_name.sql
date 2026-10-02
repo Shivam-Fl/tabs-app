@@ -1,0 +1,1 @@
+ALTER TABLE "members" ADD COLUMN "display_name" text;
