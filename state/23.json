@@ -151,7 +151,12 @@
     ],
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/lib/access.ts",
+    "src/components/member-actions.tsx",
+    "tests/integration/invites.test.ts",
+    "tests/components/member-actions.test.tsx"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
