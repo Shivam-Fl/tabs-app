@@ -329,7 +329,25 @@
     ],
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/db/schema.ts",
+    "drizzle/0003_expenses.sql",
+    "drizzle/meta/0003_snapshot.json",
+    "drizzle/meta/_journal.json",
+    "src/lib/money.ts",
+    "src/lib/access.ts",
+    "src/app/actions/expenses.ts",
+    "src/components/expense-form.tsx",
+    "src/components/expense-list.tsx",
+    "src/app/(app)/groups/[id]/expenses/page.tsx",
+    "src/app/(app)/groups/[id]/expenses/new/page.tsx",
+    "src/app/(app)/groups/[id]/expenses/loading.tsx",
+    "src/components/group-overview.tsx",
+    "tests/lib/money.test.ts",
+    "tests/integration/expenses.test.ts",
+    "tests/components/expense-form.test.tsx",
+    "tests/integration/migrations.test.ts"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
