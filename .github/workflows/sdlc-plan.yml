@@ -157,7 +157,8 @@ jobs:
     # was written, the agent step then hung on an unanswered request until its hang detector
     # killed it, and the gate — admitting output only from a green plan job — threw the plan away.
     outputs:
-      untouched: ${{ steps.fw_single.outcome == 'success' || steps.fw_arbiter.outcome == 'success' }}
+      # And the session resumed to finish it, when one was: a resume that touched the framework is no salvage.
+      untouched: ${{ (steps.fw_single.outcome == 'success' && steps.fw_single_finish.outcome != 'failure') || (steps.fw_arbiter.outcome == 'success' && steps.fw_arbiter_finish.outcome != 'failure') }}
       wrote: ${{ steps.produced.outputs.wrote }}
     env:
       ISSUE: ${{ github.event.issue.number || inputs.issue }}
@@ -188,7 +189,7 @@ jobs:
       - name: Args — planner/debugger
         if: needs.prepare.outputs.mode == 'single'
         id: rt
-        run: node .sdlc/bin/claude-args.mjs ${{ needs.prepare.outputs.agent == 'debugger' && 'debug' || 'plan' }}
+        run: node .sdlc/bin/claude-args.mjs ${{ needs.prepare.outputs.agent == 'debugger' && 'debug' || 'plan' }} --output 'work-order|stop'
       # Base URL, key style and any headers the provider demands. Empty config
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
@@ -202,15 +203,15 @@ jobs:
       - name: Args — proposer
         id: rt_prop
         if: needs.prepare.outputs.mode == 'council'
-        run: node .sdlc/bin/claude-args.mjs plan_proposer
+        run: node .sdlc/bin/claude-args.mjs plan_proposer --output 'proposal'
       - name: Args — critic
         id: rt_crit
         if: needs.prepare.outputs.mode == 'council'
-        run: node .sdlc/bin/claude-args.mjs plan_critic
+        run: node .sdlc/bin/claude-args.mjs plan_critic --output 'critique'
       - name: Args — arbiter
         id: rt_arb
         if: needs.prepare.outputs.mode == 'council'
-        run: node .sdlc/bin/claude-args.mjs plan_arbiter
+        run: node .sdlc/bin/claude-args.mjs plan_arbiter --output 'work-order|stop'
 
       # --- the debugger's app --------------------------------------------------
       # The debugger reproduces before it theorises, and its pack promised a health-checked
@@ -273,7 +274,9 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 225
+        timeout-minutes: 205
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -355,6 +358,58 @@ jobs:
       # Write and whether it failed, how the last turn ended, and its final reply — in which a
       # work order it never wrote to a file is recovered by the gate job (agent-transcript.mjs).
       # jq, not node: this is the agent's job, after it had a shell.
+      - name: Finish — Plan (single agent)
+        id: plan_single_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'single') && steps.plan_single.outcome != 'skipped' && steps.plan_single.outputs.structured_output == '' }}
+        timeout-minutes: 20
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+          PREVIEW_URL: ${{ steps.devenv.outputs.url }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The framework is untouched — Plan (single agent) — after Finish
+        id: fw_single_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'single') && steps.plan_single.outcome != 'skipped' && steps.plan_single.outputs.structured_output == '' }}
+        run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Plan (single agent)", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'single') && steps.plan_single.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.plan_single_finish.outputs.execution_file }}
+          EXEC: ${{ steps.plan_single.outputs.execution_file }}
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Plan (single agent)" returned its result
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'single') && steps.plan_single.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: What the planner did
         if: always() && steps.fw_single.outcome == 'success'
         env: { EXEC: "${{ steps.plan_single.outputs.execution_file }}" }
@@ -364,6 +419,7 @@ jobs:
       # Three passes because the expensive mistake is a confident wrong plan: it costs an
       # implementation, a CI run and a QA cycle before anyone notices the premise was wrong.
       - name: Council 1/3 — propose
+        id: propose_agent
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)". Three of these run in this
         # job, and the job's cap sits above all three.
@@ -409,6 +465,23 @@ jobs:
       # file that did not exist, and the arbiter, told it had both, stopped as cannot-plan — a whole
       # council spent to ask a person to restart it. No proposal now skips the critique, and the
       # arbiter plans from the brief as the single planner would. Shell only: an agent ran here.
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Council 1/3 — propose", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.propose_agent.outcome != 'skipped' }}
+        env:
+          EXEC: ${{ steps.propose_agent.outputs.execution_file }}
+          FILES: ${{ steps.rt_prop.outputs.files }}
+        run: |
+          for e in "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
       - name: Did the proposer write a proposal
         id: proposed
         if: needs.prepare.outputs.mode == 'council'
@@ -417,6 +490,7 @@ jobs:
           else echo "::warning::the proposer wrote no plan/proposal.json — no critique; the arbiter plans from the brief"; fi
 
       - name: Council 2/3 — critique
+        id: critique_agent
         if: needs.prepare.outputs.mode == 'council' && steps.proposed.outputs.ok == 'true'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
         timeout-minutes: 60
@@ -448,11 +522,30 @@ jobs:
         if: needs.prepare.outputs.mode == 'council' && steps.proposed.outputs.ok == 'true'
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
 
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Council 2/3 — critique", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council' && steps.proposed.outputs.ok == 'true') && steps.critique_agent.outcome != 'skipped' }}
+        env:
+          EXEC: ${{ steps.critique_agent.outputs.execution_file }}
+          FILES: ${{ steps.rt_crit.outputs.files }}
+        run: |
+          for e in "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
       - name: Council 3/3 — arbitrate
         id: plan_arbiter
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
-        timeout-minutes: 90
+        timeout-minutes: 75
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -514,6 +607,57 @@ jobs:
 
       # growth-os #20: the arbiter reported success and wrote no file, and the hidden output left
       # nothing to say why. See "What the planner did".
+      - name: Finish — Council 3/3 — arbitrate
+        id: plan_arbiter_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.plan_arbiter.outcome != 'skipped' && steps.plan_arbiter.outputs.structured_output == '' }}
+        timeout-minutes: 15
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt_arb.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The framework is untouched — Council 3/3 — arbitrate — after Finish
+        id: fw_arbiter_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.plan_arbiter.outcome != 'skipped' && steps.plan_arbiter.outputs.structured_output == '' }}
+        run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Council 3/3 — arbitrate", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.plan_arbiter.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.plan_arbiter_finish.outputs.execution_file }}
+          EXEC: ${{ steps.plan_arbiter.outputs.execution_file }}
+          FILES: ${{ steps.rt_arb.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Council 3/3 — arbitrate" returned its result
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.plan_arbiter.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt_arb.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: What the arbiter did
         if: always() && steps.fw_arbiter.outcome == 'success'
         env: { EXEC: "${{ steps.plan_arbiter.outputs.execution_file }}" }
@@ -703,7 +847,7 @@ jobs:
 
       - name: Args — plan reviewer
         id: rt_prev
-        run: node .sdlc/bin/claude-args.mjs plan_reviewer
+        run: node .sdlc/bin/claude-args.mjs plan_reviewer --output 'plan-review'
       # Base URL, key style and any headers the provider demands. Empty config
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
@@ -715,8 +859,11 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
 
       - name: Plan review agent
+        id: review_plan_agent
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
-        timeout-minutes: 225
+        timeout-minutes: 205
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -773,6 +920,56 @@ jobs:
         run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
 
       # Kept past the runner, also when the agent failed.
+      - name: Finish — Plan review agent
+        id: review_plan_agent_finish
+        if: ${{ !cancelled() && steps.review_plan_agent.outcome != 'skipped' && steps.review_plan_agent.outputs.structured_output == '' }}
+        timeout-minutes: 20
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt_prev.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The framework is untouched — Plan review agent — after Finish
+        if: ${{ !cancelled() && steps.review_plan_agent.outcome != 'skipped' && steps.review_plan_agent.outputs.structured_output == '' }}
+        run: git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)" || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Plan review agent", as its file
+        if: ${{ !cancelled() && steps.review_plan_agent.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.review_plan_agent_finish.outputs.execution_file }}
+          EXEC: ${{ steps.review_plan_agent.outputs.execution_file }}
+          FILES: ${{ steps.rt_prev.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Plan review agent" returned its result
+        if: ${{ !cancelled() && steps.review_plan_agent.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt_prev.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: Hand over the verdict
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4

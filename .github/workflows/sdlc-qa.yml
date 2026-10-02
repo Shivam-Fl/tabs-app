@@ -388,7 +388,7 @@ jobs:
 
       - name: Runtime args from config
         id: rt
-        run: node .sdlc/bin/claude-args.mjs qa
+        run: node .sdlc/bin/claude-args.mjs qa --output 'qa-report'
 
       # For check-evidence: a file older than this is not evidence from this run.
       - name: When the agent started
@@ -396,6 +396,7 @@ jobs:
         run: echo "at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
 
       - name: Test it, adversarially
+        id: qa_agent
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
         # cleanup step trades the work for the bookkeeping.
@@ -405,7 +406,9 @@ jobs:
         # failure into a failure-packet. A step that fails on its own is answerable; a job
         # that gets cancelled dispatches nobody and leaves the issue looking exactly like one
         # still being worked on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 225
+        timeout-minutes: 205
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -545,6 +548,60 @@ jobs:
       # the uploaded copy, from a checkout the code under test could not have touched, and that
       # one is the gate — this step failing lost the report before anything validated or posted
       # it, which is how a blocked report about a production host became another run at it.
+      - name: Finish — Test it, adversarially
+        id: qa_agent_finish
+        if: ${{ !cancelled() && steps.qa_agent.outcome != 'skipped' && steps.qa_agent.outputs.structured_output == '' }}
+        timeout-minutes: 20
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+          PREVIEW_URL: ${{ needs.prepare.outputs.url }}
+          BASE_BRANCH: ${{ steps.base.outputs.branch }}
+          QA_EVIDENCE_DIR: ${{ github.workspace }}/qa-evidence
+          QA_USER_EMAIL: ${{ secrets.QA_USER_EMAIL }}
+          QA_USER_PASSWORD: ${{ secrets.QA_USER_PASSWORD }}
+          QA_AUTH_MODE: ${{ steps.creds.outputs.mode }}
+          QA_ACCOUNTS: ${{ steps.creds.outputs.accounts }}
+          QA_SIGNUP_URL: ${{ steps.creds.outputs.signup_url }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Test it, adversarially", as its file
+        if: ${{ !cancelled() && steps.qa_agent.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.qa_agent_finish.outputs.execution_file }}
+          EXEC: ${{ steps.qa_agent.outputs.execution_file }}
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Test it, adversarially" returned its result
+        if: ${{ !cancelled() && steps.qa_agent.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: Did the evidence survive?
         id: evidence
         continue-on-error: true

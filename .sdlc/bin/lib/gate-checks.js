@@ -37,3 +37,59 @@ export const GATES = {
 /** The roles whose output is gated here, and so are told to run the preflight. */
 export const GATED_ROLES = ['plan', 'plan_arbiter', 'plan_reviewer', 'debug', 'review_correctness', 'review_design',
   'qa', 'root_cause', 'triage', 'maintainer', 'project', 'router'];
+
+// What an agent's session RETURNS — the artifact it exists to produce, held to its schema by the
+// SDK and written to its file by the step after it.
+//
+// The artifacts were files the agent had to remember to write, and the agents forgot: a QA run that
+// had built and run a 10-case suite, a root-cause that ran 110 turns, an arbiter, a council proposer
+// — each finished "successfully" with no file, and an hour of work was re-paid from the top. With
+// --json-schema (claude-args.mjs --output) the SDK will not end the session until the result
+// validates, and fails the step when it cannot; a step after it writes the file from that result.
+//
+//   key        a GATES key, or one of the extra outputs below
+//   a|b        a choice: the result is one object with exactly one of the keys (`work_order`,
+//              `stop`), and only that one is written
+export const EXTRA_OUTPUTS = {
+  proposal: { file: 'plan/proposal.json', schema: 'work-order' },
+  critique: { file: 'plan/critique.json', schema: { type: 'object' } },
+  'review-md': { file: 'review/review.md', text: true,
+    schema: { type: 'object', required: ['markdown'], additionalProperties: false,
+      properties: { markdown: { type: 'string', minLength: 40 } } } },
+};
+
+const strip = (v) => (Array.isArray(v) ? v.map(strip)
+  : v && typeof v === 'object' ? Object.fromEntries(Object.entries(v)
+    .filter(([k]) => !['description', 'examples', '$comment', '$id', 'title'].includes(k)).map(([k, x]) => [k, strip(x)]))
+  : v);
+
+/**
+ * The schema a session's result is held to and the files it becomes, for an --output spec.
+ * `readSchema(name)` returns a schema from .sdlc/schemas. Descriptions are dropped: the packs say
+ * what each field means, and the schema travels inside a shell-quoted argument.
+ */
+export function outputSpec(spec, readSchema) {
+  const keys = String(spec).split('|').map((k) => k.trim()).filter(Boolean);
+  if (!keys.length) throw new Error('no output named');
+  const one = (k) => {
+    const extra = EXTRA_OUTPUTS[k];
+    if (extra) {
+      return { file: extra.file, text: Boolean(extra.text),
+        schema: strip(typeof extra.schema === 'string' ? readSchema(extra.schema) : extra.schema) };
+    }
+    if (!GATES[k]) throw new Error(`"${k}" is not an output this pipeline knows`);
+    return { file: GATES[k].file, text: false, schema: strip(readSchema(k)) };
+  };
+  if (keys.length === 1) {
+    const o = one(keys[0]);
+    // A text output's result is { markdown }; a JSON output's result is the artifact itself.
+    return { schema: o.schema, files: [[o.text ? 'markdown' : '.', o.file, o.text ? 'text' : 'json']] };
+  }
+  const prop = (k) => k.replace(/-/g, '_');
+  const parts = keys.map((k) => [prop(k), one(k)]);
+  return {
+    schema: { type: 'object', additionalProperties: false, minProperties: 1, maxProperties: 1,
+      properties: Object.fromEntries(parts.map(([p, o]) => [p, o.schema])) },
+    files: parts.map(([p, o]) => [p, o.file, 'json']),
+  };
+}

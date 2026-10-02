@@ -8,10 +8,10 @@
 // ones or underpowered on the hard ones. Council members are steps like any other, so the
 // proposer and the arbiter can run at different weights.
 
-import { realpathSync, writeFileSync } from 'node:fs';
+import { readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { openaiApis } from './model-bridge.mjs';
 import { fileURLToPath } from 'node:url';
-import { GATED_ROLES } from './lib/gate-checks.js';
+import { GATED_ROLES, outputSpec } from './lib/gate-checks.js';
 import { loadConfig, setOutput, die } from './lib/actions.js';
 
 // Tools are a safety boundary, not a preference: a reviewer with Edit could rewrite the code
@@ -288,11 +288,26 @@ if (isMain && process.argv[2] === '--probe') {
   const turns = Number(configured) > 0 ? Number(configured) : 0;
   const model = modelFor(cfg, role);
 
+  // `--output <spec>`: what the session returns (lib/gate-checks.js outputSpec). The SDK holds the
+  // result to the schema and fails the step when it cannot produce one; the step after the agent
+  // writes the files from it. Single-quoted inside claude_args, so a schema may hold no quote.
+  const at = process.argv.indexOf('--output');
+  const spec = at > 0 ? process.argv[at + 1] : '';
+  let schemaArg = '';
+  if (spec) {
+    const { schema, files } = outputSpec(spec, (n) => JSON.parse(readFileSync(new URL(`../schemas/${n}.json`, import.meta.url), 'utf8')));
+    const json = JSON.stringify(schema);
+    if (json.includes("'")) die(`the ${spec} schema holds a single quote, which cannot travel inside claude_args`);
+    schemaArg = `--json-schema '${json}'`;
+    setOutput('files', JSON.stringify(files));
+  }
+
   const args = [
     turns ? `--max-turns ${turns}` : '',
     `--allowedTools ${TOOLS[role]}`,
     model ? `--model ${model}` : '',
     `--append-system-prompt ${trustArg(GATED_ROLES.includes(role) ? preflightNote(process.env.ISSUE) : '')}`,
+    schemaArg,
   ].filter(Boolean).join(' ');
 
   setOutput('args', args);

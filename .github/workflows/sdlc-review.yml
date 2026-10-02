@@ -201,10 +201,10 @@ jobs:
 
       - name: Args — reviewer
         id: rt
-        run: node .sdlc/bin/claude-args.mjs review
+        run: node .sdlc/bin/claude-args.mjs review --output 'review-md'
       - name: Args — correctness
         id: rt_corr
-        run: node .sdlc/bin/claude-args.mjs review_correctness
+        run: node .sdlc/bin/claude-args.mjs review_correctness --output 'review-correctness'
       # Base URL, key style and any headers the provider demands. Empty config
       # means the default Anthropic endpoint, exactly as before this existed.
       - name: Provider
@@ -217,10 +217,11 @@ jobs:
 
       - name: Args — design
         id: rt_des
-        run: node .sdlc/bin/claude-args.mjs review_design
+        run: node .sdlc/bin/claude-args.mjs review_design --output 'review-design'
 
       # --- single reviewer ------------------------------------------------------
       - name: Review (single agent)
+        id: review_single
         if: needs.prepare.outputs.mode != 'council'
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
@@ -231,7 +232,9 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 225
+        timeout-minutes: 205
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -342,7 +345,61 @@ jobs:
       # A single reviewer's false positive lands on the PR as fact, wastes the implementer's
       # next attempt, and teaches everyone to skim reviews. Findings only get posted if they
       # survive an independent second reading.
+      - name: Finish — Review (single agent)
+        id: review_single_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode != 'council') && steps.review_single.outcome != 'skipped' && steps.review_single.outputs.structured_output == '' }}
+        timeout-minutes: 20
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The agent left the framework alone — after Finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode != 'council') && steps.review_single.outcome != 'skipped' && steps.review_single.outputs.structured_output == '' }}
+        run: >-
+          git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin
+          && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)"
+          || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Review (single agent)", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode != 'council') && steps.review_single.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.review_single_finish.outputs.execution_file }}
+          EXEC: ${{ steps.review_single.outputs.execution_file }}
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Review (single agent)" returned its result
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode != 'council') && steps.review_single.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: Council 1/2 — correctness
+        id: review_a
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
@@ -353,7 +410,9 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 110
+        timeout-minutes: 95
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -389,11 +448,65 @@ jobs:
       # Before reviewer B reads it, and repaired where the fault is cosmetic ("Blocking" is
       # blocking). A file that is missing or cannot be read fails here, by name: it used to read
       # as "no findings", and an unchecked PR was announced as cleanly cross-reviewed.
+      - name: Finish — Council 1/2 — correctness
+        id: review_a_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_a.outcome != 'skipped' && steps.review_a.outputs.structured_output == '' }}
+        timeout-minutes: 15
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt_corr.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The agent left the framework alone — after Finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_a.outcome != 'skipped' && steps.review_a.outputs.structured_output == '' }}
+        run: >-
+          git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin
+          && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)"
+          || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Council 1/2 — correctness", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_a.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.review_a_finish.outputs.execution_file }}
+          EXEC: ${{ steps.review_a.outputs.execution_file }}
+          FILES: ${{ steps.rt_corr.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Council 1/2 — correctness" returned its result
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_a.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt_corr.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: Council 1/2 — is the file readable
         if: needs.prepare.outputs.mode == 'council'
         run: node .sdlc/bin/sdlc-ctl.mjs validate --schema review-correctness --file review/correctness.json
 
       - name: Council 2/2 — design, and verify reviewer A
+        id: review_b
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
@@ -404,7 +517,9 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 110
+        timeout-minutes: 95
+        # Whether it produced its result is judged below, not by how the session ended.
+        continue-on-error: true
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -441,6 +556,59 @@ jobs:
           && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)"
           || { echo "::error::the agent modified the framework"; exit 1; }
 
+      - name: Finish — Council 2/2 — design, and verify reviewer A
+        id: review_b_finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_b.outcome != 'skipped' && steps.review_b.outputs.structured_output == '' }}
+        timeout-minutes: 15
+        continue-on-error: true
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: ${{ steps.rt_des.outputs.args }} --continue
+          prompt: |
+            Your session ended before it returned its result, so none of the work above can be
+            used yet. Return it now, as the structured result this session is held to — from
+            what you have already found and written. Do not start the task over. If an earlier
+            turn wrote the file, read it back and return what it holds, corrected if it is wrong.
+      - name: The agent left the framework alone — after Finish
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_b.outcome != 'skipped' && steps.review_b.outputs.structured_output == '' }}
+        run: >-
+          git diff --quiet "$GITHUB_SHA" -- .sdlc .github bin
+          && test -z "$(git status --porcelain --untracked-files=all -- .sdlc .github bin)"
+          || { echo "::error::the agent modified the framework"; exit 1; }
+
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Council 2/2 — design, and verify reviewer A", as its file
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_b.outcome != 'skipped' }}
+        env:
+          EXEC_FINISH: ${{ steps.review_b_finish.outputs.execution_file }}
+          EXEC: ${{ steps.review_b.outputs.execution_file }}
+          FILES: ${{ steps.rt_des.outputs.files }}
+        run: |
+          for e in "$EXEC_FINISH" "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
+      - name: Check that "Council 2/2 — design, and verify reviewer A" returned its result
+        if: ${{ !cancelled() && (needs.prepare.outputs.mode == 'council') && steps.review_b.outcome != 'skipped' }}
+        env:
+          FILES: ${{ steps.rt_des.outputs.files }}
+        run: |
+          for f in $(printf '%s' "$FILES" | jq -r '.[][1]'); do [ -s "$f" ] && exit 0; done
+          echo "::error::the agent returned no result, even resumed: none of $(printf '%s' "$FILES" | jq -r '[.[][1]] | join(", ")') exists"; exit 1
       - name: Council 2/2 — is the file readable
         if: needs.prepare.outputs.mode == 'council'
         run: node .sdlc/bin/sdlc-ctl.mjs validate --schema review-design --file review/design.json

@@ -193,7 +193,7 @@ jobs:
 
       - name: Args — router
         id: rt
-        run: node .sdlc/bin/claude-args.mjs router
+        run: node .sdlc/bin/claude-args.mjs router --output 'flow-plan'
 
       - name: The limits this artifact is held to
         id: limits
@@ -210,6 +210,7 @@ jobs:
           setOutput("areas", enabledRiskAreas(await loadConfig()).join("; ") || "(none — every area is switched off)")'
 
       - name: Route — the model pass
+        id: route_agent
         # A HANG DETECTOR, not a budget. Set far above any honest run — an agent reading a
         # real repository legitimately takes a long time, and truncating that to protect a
         # cleanup step trades the work for the bookkeeping.
@@ -292,6 +293,23 @@ jobs:
 
       # The one thing this job hands over. Whatever else the agent left in this workspace stays
       # here. A run that wrote no plan uploads nothing, and apply-route says so.
+      # The session's result, validated by the SDK against its schema, written as the file the
+      # jobs after this one read (lib/gate-checks.js outputSpec). It replaces anything the agent
+      # wrote there itself. Shell and jq only: an agent ran in this job.
+      - name: The result of "Route — the model pass", as its file
+        if: ${{ !cancelled() && steps.route_agent.outcome != 'skipped' }}
+        env:
+          EXEC: ${{ steps.route_agent.outputs.execution_file }}
+          FILES: ${{ steps.rt.outputs.files }}
+        run: |
+          for e in "$EXEC"; do
+            [ -n "$e" ] && [ -f "$e" ] || continue
+            out=$(jq -sc '(if length == 1 and (.[0] | type) == "array" then .[0] else . end) | map(select(type == "object" and .type == "result" and .structured_output != null)) | last | .structured_output // empty' "$e")
+            [ -n "$out" ] && break
+          done
+          [ -n "${out:-}" ] || { echo "no structured result to write"; exit 0; }
+          printf '%s' "$out" | jq -r --argjson files "$FILES" '. as $o | $files[] | . as [$k, $f, $m] | (if $k == "." then $o else $o[$k] end) as $v | select($v != null) | [$f, ((if $m == "text" then $v else ($v | tojson) end) | @base64)] | @tsv' |
+            while IFS=$'\t' read -r f b; do mkdir -p "$(dirname "$f")"; printf '%s' "$b" | base64 -d > "$f"; echo "wrote $f from the session's structured result"; done
       - name: Hand the model's route to the job that applies it
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
