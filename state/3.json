@@ -510,7 +510,32 @@
         "detail": "Patterns: .sdlc/memory/patterns/ is an empty README and this bug is the exact shape the directory exists to catch. A Tailwind v4 @theme token declared under a namespace the version does not generate utilities from fails SILENTLY — tsc, eslint and vitest were all green on the broken build, and it survived a full review — and the same mistake is sitting in the file the ticket just edited, in a second namespace (--radius), still unmade. Whoever next opens globals.css will read --spacing-space-3 as proof the block was audited, and it was, and the answer was wrong once. A 'silent dead token' entry would cost one file and would have caught both.\n\n`.sdlc/memory/patterns/:1`\n\nEvidence: `.sdlc/memory/patterns/README.md` is the only file in the directory and its body is 'Empty for now. It fills as the system works.' — which is now false, this is the system working. The index line reads 'patterns/ — bug shapes this repo has produced before. Grep by symptom.' The symptom that fits both halves of this ticket: 'a UI utility class compiles to no rule and nothing complains'. I reproduced it directly against the pinned tailwindcss 4.3.3: a @theme block declaring only `--space-3: 12px` emits zero occurrences of `gap-space-3`; the same token as `--spacing-space-3` emits `.gap-space-3 { gap: var(--spacing-space-3); }`. Compiling the PR's real src/app/globals.css against every .ts/.tsx on the branch gives `grep -c 'gap-space-3'` = 1 and `grep -c 'rounded-radius'` = 0 — the same block, one namespace right and one namespace wrong, in the file this PR edited. The work order's own confidence_rationale records that 'all three were green on the broken build'. The library file should be named for the symptom, per that README's own instruction.\n\nFix: Add .sdlc/memory/patterns/silent-dead-theme-token.md: symptom (a class written in JSX produces no CSS rule and no tool complains), cause (a @theme key outside v4's generating namespaces — `--space-*` for spacing, `--radius` for border-radius — is emitted as a plain custom property and generates nothing), how it was found (only by compiling the real stylesheet and grepping for the class name, or by measuring in a browser; nothing CI runs observes it), and the check (compile globals.css with the real content set and assert each token in the block has at least one emitted rule). Naming it by symptom is what the README asks for, so a future agent grepping 'no rule' or 'not applied' finds it."
       }
     ],
-    "pr": "13"
+    "pr": "13",
+    "qa": [
+      {
+        "id": "BUG-3",
+        "severity": "minor",
+        "area": "responsive layout / top bar",
+        "title": "A long unbroken display name overflows the top bar at 360px",
+        "expected": "The top bar fits a 360px viewport for any display name the schema accepts.",
+        "actual": "With the 40-character name Wolfeschlegelsteinhausenbergerdorffenfun, documentElement.scrollWidth is 548 against a clientWidth of 360 on both / and /settings; the name link alone measures 318.84x44 @141.05,10. Forcing the header's padding-inline to 0 - what the pre-fix build rendered, because px-space-4 compiled to no rule - still leaves scrollWidth at 532 > 360, so the pre-fix build overflowed as well. The commit moves the threshold about 32px earlier but does not cause the overflow.",
+        "repro": [
+          "Sign in at http://localhost:3000 and open /settings",
+          "Save the display name Wolfeschlegelsteinhausenbergerdorffenfun",
+          "Set the viewport to 360x640 and open /",
+          "documentElement.scrollWidth is 548 against clientWidth 360"
+        ],
+        "evidence": [
+          "qa-evidence/BUG-3-measurements.txt",
+          "qa-evidence/BUG-3-longname-360-home.png",
+          "qa-evidence/BUG-3-longname-360-settings.png",
+          "qa-evidence/test-results/05-regression-T-21-the-lon-e79dd-bar-at-360px-diff-boundary--chromium"
+        ],
+        "suspected_cause": "The name link has no max-width or truncation, so an unbroken token pushes the flex row past the viewport. Pre-existing; this PR resolves the spacing tokens and lowers the name at which it happens without addressing the width.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   },
   "qa": {
     "verdict": "fail",
