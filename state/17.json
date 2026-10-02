@@ -73,10 +73,8 @@
     "mode": "committed"
   },
   "touch_paths": [
-    "tests/components/ui.test.tsx",
-    "src/components/ui/top-bar.tsx",
-    "src/components/shell.tsx",
-    "tests/components/ui.test.tsx"
+    "src/app/globals.css",
+    "tests/lib/tailwind-source-scope.test.ts"
   ],
   "acceptance": [],
   "planned_route": [
