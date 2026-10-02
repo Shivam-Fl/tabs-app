@@ -26,24 +26,32 @@ interface ActionMock {
   calls: number;
   holding: boolean;
   release: (() => void) | null;
+  /** Which of the two actions the last submit went to — the whole of "create form vs edit form". */
+  last: 'createExpense' | 'updateExpense' | null;
 }
 
 const action = vi.hoisted(
-  (): ActionMock => ({ result: null, calls: 0, holding: false, release: null }),
+  (): ActionMock => ({ result: null, calls: 0, holding: false, release: null, last: null }),
 );
-vi.mock('@/app/actions/expenses', () => ({
-  createExpense: async () => {
+vi.mock('@/app/actions/expenses', () => {
+  const respond = async (name: 'createExpense' | 'updateExpense') => {
     action.calls += 1;
+    action.last = name;
     if (action.holding) {
       await new Promise<void>((resolve) => {
         action.release = resolve;
       });
     }
     return action.result;
-  },
-}));
+  };
+  return {
+    createExpense: () => respond('createExpense'),
+    updateExpense: () => respond('updateExpense'),
+  };
+});
 
 import { ExpenseForm } from '@/components/expense-form';
+import type { ExpenseFormInitial } from '@/components/expense-form';
 
 afterEach(cleanup);
 
@@ -53,6 +61,7 @@ beforeEach(() => {
   action.calls = 0;
   action.holding = false;
   action.release = null;
+  action.last = null;
 });
 
 const group = { id: '6b1f2f9c-0f1a-4a4f-9d1f-2f0a6c7b8d90', name: 'Lisbon', currency: 'EUR' };
@@ -325,5 +334,98 @@ describe('the picker’s defaults', () => {
     for (const member of members) {
       expect(picker().getByLabelText(member.displayName)).toBeChecked();
     }
+  });
+});
+
+/**
+ * The same component on its other route. The edit screen hands it the stored expense rendered back
+ * to text and it must open showing exactly that — including a split with a remainder, which is
+ * shown as entered rather than re-normalised — and then write with updateExpense.
+ */
+function renderEditForm(initial: ExpenseFormInitial) {
+  return render(<ExpenseForm group={group} members={members} today="2026-10-02" initial={initial} />);
+}
+
+const stored: ExpenseFormInitial = {
+  expenseId: 'e-1',
+  description: 'Taxi to the airport',
+  amount: '31.5',
+  date: '2026-09-28',
+  category: 'travel',
+  note: 'bolt',
+  splitType: 'exact',
+  participants: ['m-owner', 'm-sam'],
+  inputs: { 'm-owner': '10', 'm-sam': '21.5' },
+  payers: ['m-owner'],
+  payerAmounts: { 'm-owner': '31.5' },
+};
+
+describe('the edit form', () => {
+  it('opens every field from the stored rule rather than from the new-expense defaults', () => {
+    renderEditForm(stored);
+
+    expect(screen.getByLabelText('Description')).toHaveValue('Taxi to the airport');
+    expect(screen.getByLabelText('Amount')).toHaveValue('31.5');
+    expect(screen.getByLabelText('Date')).toHaveValue('2026-09-28');
+    expect(screen.getByLabelText('Category')).toHaveValue('travel');
+    expect(screen.getByLabelText('Note')).toHaveValue('bolt');
+    expect(screen.getByLabelText('Exact amounts')).toBeChecked();
+
+    // The picker shows exactly the members the expense was saved with, checked, and the numbers
+    // they were given — not a re-normalised version of the rule.
+    expect(picker().getByLabelText('Priya')).toBeChecked();
+    expect(picker().getByLabelText('Sam')).toBeChecked();
+    expect(picker().getByLabelText('Dev')).not.toBeChecked();
+    expect(screen.getByLabelText('Amount for Priya')).toHaveValue('10');
+    expect(screen.getByLabelText('Amount for Sam')).toHaveValue('21.5');
+
+    // And the payers, with what each of them put in.
+    expect(payers().getByLabelText('Priya')).toBeChecked();
+    expect(payers().getByLabelText('Sam')).not.toBeChecked();
+    expect(payers().getByLabelText('Priya paid')).toHaveValue('31.5');
+
+    // The live summary resolves the stored rule, so an untouched save is visibly a no-op.
+    expect(screen.getByText('Priya €10.00 · Sam €21.50')).toBeInTheDocument();
+  });
+
+  it('keeps a single payer’s stored amount instead of the implicit total', () => {
+    // The one-payer fallback exists so a NEW expense needs no typing in the payer block. On a
+    // reopened one it must not overwrite what was stored: this payer put in part of the total,
+    // and an untouched save has to store that part again rather than the whole total.
+    renderEditForm({ ...stored, payers: ['m-owner'], payerAmounts: { 'm-owner': '10' } });
+
+    expect(payers().getByLabelText('Priya paid')).toHaveValue('10');
+    expect(screen.getByText('Payers add up to €10.00 — €21.50 short of the total.')).toBeInTheDocument();
+  });
+
+  it('submits the update action, carrying the expense it was opened with', async () => {
+    renderEditForm(stored);
+    expect(document.querySelector<HTMLInputElement>('input[name="expenseId"]')).toHaveValue('e-1');
+
+    action.result = { ok: true, groupId: group.id };
+    submit();
+
+    await waitFor(() => {
+      expect(action.last).toBe('updateExpense');
+    });
+    // The list is where an edit lands, the same as a create: the row a person just changed is
+    // there to be read.
+    await waitFor(() => {
+      expect(push).toHaveBeenCalledWith(`/groups/${group.id}/expenses`);
+    });
+  });
+
+  it('still writes with the create action when no expense was handed to it', async () => {
+    renderForm();
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Dinner' } });
+    typeAmount('10');
+
+    action.result = { ok: true, groupId: group.id };
+    submit();
+
+    await waitFor(() => {
+      expect(action.last).toBe('createExpense');
+    });
+    expect(document.querySelector('input[name="expenseId"]')).toBeNull();
   });
 });

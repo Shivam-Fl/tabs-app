@@ -167,6 +167,53 @@ export function formatPercent(hundredths: bigint): string {
   return `${negative ? '-' : ''}${absolute / 100n}.${(absolute % 100n).toString().padStart(2, '0')}%`;
 }
 
+// --- stored inputs back to text -----------------------------------------------------
+
+/**
+ * An integer count of `fractionDigits` fractional units as plain editable text — the inverse of
+ * parseDecimal, and the one formatter here that emits neither a symbol nor a grouping separator.
+ *
+ * It has to be exactly what the parser accepts, because the edit form's whole promise is that
+ * reopening an expense and saving it unchanged writes the same expense again: '1,234.56' would
+ * come back refused with "enter the amount without separators", and a JPY amount rendered as
+ * '¥1,234' would not parse at all. The fraction is trimmed of trailing zeros so the shortest
+ * form is shown — '12.30' reads as '12.3' — and both parse to the same minor units.
+ */
+export function formatDecimalUnits(value: bigint, fractionDigits: number): string {
+  const negative = value < 0n;
+  const absolute = negative ? -value : value;
+  const whole = (absolute / 10n ** BigInt(fractionDigits)).toString();
+  if (fractionDigits === 0) return `${negative ? '-' : ''}${whole}`;
+
+  const fraction = (absolute % 10n ** BigInt(fractionDigits))
+    .toString()
+    .padStart(fractionDigits, '0')
+    .replace(/0+$/, '');
+  return `${negative ? '-' : ''}${whole}${fraction === '' ? '' : `.${fraction}`}`;
+}
+
+/**
+ * An amount in the group's currency as plain editable text, which is the inverse of
+ * parseMajorUnits: minor units in, a number a person could have typed out, in the currency's own
+ * number of decimal places — ¥1,234 is '1234' and €12.34 is '12.34'.
+ */
+export function formatMajorUnits(minor: bigint, currency: string): string {
+  return formatDecimalUnits(minor, fractionDigits(currency));
+}
+
+/**
+ * The plain editable text for one stored split input, in the unit its split type counts in:
+ * minor units for `exact`, hundredths of a percent for `percentage`, a plain count for `shares`.
+ * Empty for an equal split and for a member who is not in the split, neither of which has a
+ * number stored — nothing is written into the field, rather than a zero the person never typed.
+ */
+export function formatSplitInput(type: ExpenseSplitType, value: bigint | null, currency: string): string {
+  if (type === 'equal' || value === null) return '';
+  if (type === 'exact') return formatMajorUnits(value, currency);
+  if (type === 'percentage') return formatDecimalUnits(value, 2);
+  return value.toString();
+}
+
 // --- splitting ----------------------------------------------------------------------
 
 /** One member's place in the split, and the number they were given for it. */

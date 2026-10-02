@@ -136,7 +136,42 @@ describe('the expenses list', () => {
     expect(amount.querySelector('.sr-only')).toBeNull();
     expect(screen.queryByText(/you are owed|you owe|settled/)).not.toBeInTheDocument();
 
-    // Right-aligned against the row's edge, and never wrapping onto its own line.
-    expect(amount.closest('li')?.lastElementChild).toHaveClass('items-end');
+    // Right-aligned against the row's edge, and never wrapping onto its own line. The row is a
+    // whole-row link, so the flex container is the anchor rather than the list item.
+    expect(amount.closest('li')?.firstElementChild?.tagName).toBe('A');
+    expect(amount.closest('a')?.lastElementChild).toHaveClass('items-end');
+  });
+
+  it('makes the whole row a link to that expense’s edit screen', () => {
+    render(<ExpenseList group={group} expenses={[taxi, dinner]} />);
+
+    // The row IS the target: everything a person can see on it is inside the anchor, and the
+    // list item holds nothing but the anchor and its divider.
+    const taxiRow = screen.getByText('Taxi to the airport').closest('li');
+    const link = within(taxiRow as HTMLElement).getByRole('link');
+    expect(link).toHaveAttribute('href', `/groups/${group.id}/expenses/${taxi.id}/edit`);
+    expect(within(link).getByText('€31.50')).toBeInTheDocument();
+    expect(within(link).getByText('Paid by Priya €10.50, Sam €21.00')).toBeInTheDocument();
+    expect(within(link).getByText('2026-10-01')).toBeInTheDocument();
+
+    const dinnerLink = within(screen.getByText('Dinner').closest('li') as HTMLElement).getByRole('link');
+    expect(dinnerLink).toHaveAttribute('href', `/groups/${group.id}/expenses/${dinner.id}/edit`);
+  });
+
+  it('confirms a deletion in place with the sentence the server resolved, and only that', () => {
+    const { unmount } = render(
+      <ExpenseList group={group} expenses={[taxi]} deletedDescription="Dinner" />,
+    );
+
+    // No toast: the screen the delete happened on says what changed, and it says it in words the
+    // server produced from the id rather than from anything the URL carried.
+    expect(screen.getByRole('status')).toHaveTextContent('Deleted Dinner.');
+    unmount();
+
+    // Nothing resolved — a forged, stale or someone else's id — renders no confirmation at all,
+    // rather than a sentence built out of the parameter.
+    render(<ExpenseList group={group} expenses={[taxi]} deletedDescription={null} />);
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Deleted/)).not.toBeInTheDocument();
   });
 });
