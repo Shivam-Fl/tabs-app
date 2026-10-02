@@ -513,7 +513,31 @@
         "detail": "Concurrent same-user joins can 500 on Neon: joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS plus the partial unique index, but without ON CONFLICT the loser of a truly overlapping pair gets a unique violation instead of the graceful no-op the PGlite test proves.\n\n`src/lib/access.ts:526`\n\nEvidence: src/lib/access.ts:526-534 INSERT..SELECT..WHERE NOT EXISTS with bare RETURNING; backstop is members_group_user_active_idx. Under READ COMMITTED two overlapping transactions both pass NOT EXISTS, then the second raises unique_violation when the first commits. PGlite serializes so the integration test cannot show this.\n\nFix: Add ON CONFLICT DO NOTHING (conflict target (group_id, user_id) with the partial-index predicate) and keep treating empty RETURNING as the no-op path."
       }
     ],
-    "pr": "22"
+    "pr": "22",
+    "qa": [
+      {
+        "id": "BUG-1",
+        "severity": "minor",
+        "title": "Leaving a group strands the member on a not-found members page instead of home",
+        "area": "leave flow",
+        "expected": "Confirming Leave navigates to /?left=<groupId> showing the 'You left <group> · Undo' notice",
+        "actual": "The membership ends but the client stays on /groups/<id>/members, which re-renders as \"This group isn't available.\"; the undo notice is unreachable from this path",
+        "repro": [
+          "Sign up as owner, create a group",
+          "Sign up a second user, join via the invite link",
+          "As the member open the members page, click Leave, confirm",
+          "Observe the URL stays on /members with the not-found page instead of home"
+        ],
+        "evidence": [
+          "/home/runner/work/tabs-app/tabs-app/qa-evidence/test-results/claim-T-14-leaving-lands-on-home-with-the-undo-notice-chromium/test-failed-1.png",
+          "/home/runner/work/tabs-app/tabs-app/qa-evidence/test-results/claim-T-14-leaving-lands-on-home-with-the-undo-notice-chromium/trace.zip",
+          "/home/runner/work/tabs-app/tabs-app/qa-evidence/probe.har"
+        ],
+        "suspected_cause": "Pre-existing: revalidatePath in leaveGroup re-renders the members page to notFound, unmounting LeaveButton before its state.ok effect can router.push('/?left='). Untouched by this PR: member-actions.tsx is not in the PR diff and leaveGroup changed only by a schema-const rename.",
+        "introduced_by_pr": false,
+        "reproducible": "always"
+      }
+    ]
   },
   "qa": {
     "verdict": "pass",
