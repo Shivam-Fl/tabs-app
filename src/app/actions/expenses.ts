@@ -36,8 +36,8 @@ const MAX_NOTE = 500;
 
 /**
  * The largest value the int8 columns hold: amount_minor on expenses and on expense_payer, and
- * input_value on expense_split_input. parseMajorUnits reads anything — it builds the whole part
- * with BigInt rather than a float — so without this bound an oversized figure reaches the insert
+ * input_value on expense_split_input. The parsers read anything — parseDecimal builds the whole
+ * part with BigInt rather than a float — so without this bound an oversized figure reaches the insert
  * and Postgres raises out-of-range, which the form sees as an uncaught 500 instead of a sentence
  * beside the field that caused it.
  */
@@ -267,11 +267,16 @@ export async function createExpense(
         fieldErrors[`input.${member.memberId}`] ??= parsed.message;
         return { memberId: member.memberId, value: 0n };
       }
-      // Only an exact input is money in minor units, held in input_value exactly as it was
-      // typed, so it carries the same bound as the total and the payer parts. A percentage or a
-      // share count is a weight, not an amount.
-      if (splitType.data === 'exact' && parsed.value > MAX_INT8) {
-        fieldErrors[`input.${member.memberId}`] ??= 'That amount is too large to record.';
+      // Every non-null input lands in the int8 input_value column exactly as it was typed —
+      // minor units for an exact split, hundredths of a percent for a percentage, a plain count
+      // for shares — so every one of them carries the same bound as the total and the payer
+      // parts, whatever unit the split type counts in. The sentence says "amount" only for the
+      // exact branch, where the number really is money.
+      if (parsed.value > MAX_INT8) {
+        fieldErrors[`input.${member.memberId}`] ??=
+          splitType.data === 'exact'
+            ? 'That amount is too large to record.'
+            : 'That number is too large to record.';
         return { memberId: member.memberId, value: 0n };
       }
       return { memberId: member.memberId, value: parsed.value };

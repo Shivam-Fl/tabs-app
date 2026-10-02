@@ -649,6 +649,12 @@ describe('amounts the columns cannot hold', () => {
    * Postgres raised out-of-range: an uncaught 500 instead of a sentence beside a field.
    */
   const HUGE = '123456789012345678901234567890.12';
+  /**
+   * The same figure for a shares field, which is counted in whole units: the decimal point above
+   * would be refused by the parse before the bound was ever consulted, so the weight that reaches
+   * the int8 column unchecked is a whole number.
+   */
+  const HUGE_SHARES = '123456789012345678901234567890';
   const INT8_MAX_MINOR = 9223372036854775807n;
   const nothing = { expenses: 0, payers: 0, shares: 0, inputs: 0, activity: 0 };
 
@@ -720,6 +726,67 @@ describe('amounts the columns cannot hold', () => {
     const [expense] = await db.select().from(expenses);
     expect(expense?.amountMinor).toBe(INT8_MAX_MINOR);
     expect((await db.select().from(expensePayer))[0]?.amountMinor).toBe(INT8_MAX_MINOR);
+  });
+
+  it('refuses a shares weight above the int8 maximum beside that member’s field (AC-1)', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId } = await groupWithThree();
+
+    // The shares branch of the same hole: the weight is not money and is never compared to the
+    // total, so nothing but this bound stands between it and the int8 input_value column.
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'shares',
+      participants: [ownerMemberId, samMemberId],
+      inputs: { [ownerMemberId]: '1', [samMemberId]: HUGE_SHARES },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That number is too large to record.');
+    // Beside the member who typed it, not the first member in the split.
+    expect(result.fieldErrors?.[`input.${ownerMemberId}`]).toBeUndefined();
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('refuses a percentage above the int8 maximum beside that member’s field', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId } = await groupWithThree();
+
+    // Defence in depth: this one can never pass the sum-to-100 check, so it would have been
+    // refused as a split mismatch anyway — but a figure the column cannot hold is answered
+    // beside the field that holds it, before the split is asked about at all.
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'percentage',
+      participants: [ownerMemberId, samMemberId],
+      inputs: { [ownerMemberId]: '100', [samMemberId]: '92233720368547758.08' },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That number is too large to record.');
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('accepts a shares weight of exactly the int8 maximum, and stores it exactly (AC-2)', async () => {
+    const { owner, groupId, ownerMemberId } = await groupWithThree();
+
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'shares',
+      participants: [ownerMemberId],
+      inputs: { [ownerMemberId]: INT8_MAX_MINOR.toString() },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result).toEqual({ ok: true, groupId });
+    const inputs = await db.select().from(expenseSplitInput);
+    expect(inputs).toHaveLength(1);
+    // A count, not an amount: the whole weight is what was stored, untouched by the split.
+    expect(inputs[0]?.inputValue).toBe(INT8_MAX_MINOR);
+    expect((await db.select().from(expenseShare))[0]?.amountMinor).toBe(1000n);
   });
 });
 
