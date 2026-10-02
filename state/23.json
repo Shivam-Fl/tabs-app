@@ -267,5 +267,14 @@
   "work_order_posted_at": "2026-10-02T19:05:06.361Z",
   "work_order_from": "plan",
   "work_order_comment": "5959489412",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "follow_ups": {
+    "review": [
+      {
+        "title": "Scope: src/components/group-list.tsx and its test tests/components/group-screens.test.tsx are in the PR diff but not in the work order files[], which lists only src/lib/access.ts, src/components/member-actions.tsx, tests/integration/invites.test.ts and tests/components/member-actions.test.tsx.",
+        "detail": "Scope: src/components/group-list.tsx and its test tests/components/group-screens.test.tsx are in the PR diff but not in the work order files[], which lists only src/lib/access.ts, src/components/member-actions.tsx, tests/integration/invites.test.ts and tests/components/member-actions.test.tsx.\n\n`src/components/group-list.tsx:28`\n\nEvidence: work-order.json files[] lists 4 paths; gh pr diff 24 --name-only lists 6 files, the extra two being src/components/group-list.tsx and tests/components/group-screens.test.tsx. Commit message discloses this as 'Beyond the work order, and required for AC-3'.\n\nFix: No code change needed: the empty-list branch would drop the '?left=' Undo notice for exactly the AC-3 walkthrough, so the change is required and tested. Amend the work order files[] to include both paths."
+      }
+    ],
+    "pr": "24"
+  }
 }
