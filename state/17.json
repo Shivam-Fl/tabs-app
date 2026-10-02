@@ -68,5 +68,136 @@
     "decided_at": "2026-10-02T09:46:14.826Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "issue": 17,
+    "version": 1,
+    "kind": "chore",
+    "reproduced": false,
+    "confidence": 78,
+    "confidence_rationale": "The three code findings were read directly in the files and each is unambiguous: the regex literal at tests/components/ui.test.tsx:307 is /max-w-\\[\\d/, the fixture at line 294 renders <main /> as a child of a component that already renders <main id=\"main\">, and tail -c 1 on all three named files returns a non-newline byte. The verify suite is green on main today (7 files, 86 tests) so the starting point is known. Confidence is held below the low 80s by one item only: the QA-reported 360px overflow. I could not run a browser in this environment -- chromium is installed but every launch mode hangs or dies on dbus/GCM init and no CDP port binds -- so that finding is carried as a browser acceptance criterion plus a class-level assertion rather than as a code change I could confirm by measurement.",
+    "understanding": "Four review findings and one QA finding, all filed against PR #13 which is now merged to main as 6c423f4. Three of the four review items are real and still present, and I confirmed each by reading the file rather than taking the reviewer's word for it. (1) The regression guard against BUG-4 returning is `expect(nameLink.className).not.toMatch(/max-w-\\[\\d/)` at tests/components/ui.test.tsx:307, which matches only a bracket immediately followed by an ASCII digit, so `max-w-[9rem]`, `max-w-[--cap]` and an inline `style={{maxWidth:'120px'}}` all pass it. The reviewer proposed widening to `/max-w-\\[/`, which is right and is what this plan does. I also confirmed the reviewer's separate observation that the built stylesheet still carries a dead `.max-w-\\[120px\\]{max-width:120px}` rule -- I found it in .next/static/chunks/344dlsflvvy5p.css, emitted because the test file's own comment text contains the class name and Tailwind scans it; it applies to nothing, so it is cosmetic bundle noise and not a live ceiling. (2) The fixture at tests/components/ui.test.tsx:294 renders `<Shell user={...}><main /></Shell>` while Shell already wraps its children in `<main id=\"main\">` (src/components/shell.tsx:18), producing two nested mains. src/ renders `<main>` only in shell.tsx:18 and the two signed-out auth pages, so the product never produces this shape -- the fixture models a composition the app cannot render. (3) The three files named lack a trailing newline; I verified with `tail -c 1 | xxd -p` that all three end in `7d` (`}`), not `0a`. (4) The scope-reconciliation note asks for no code change, so it is not in files[]. The QA finding is that a 40-character display name pushes documentElement.scrollWidth to 548 against a clientWidth of 360. I could not reproduce it: chromium is present at /usr/bin/chromium but will not run in this sandbox. Reading the markup, the shrink chain the QA run needed already exists on main -- `min-w-0` on the nav (top-bar.tsx:23), `shrink-0` on the Groups link and the sign-out form, `min-w-[44px]` on the name link and `truncate` on its inner span -- and I confirmed every one of those rules is actually emitted in the production CSS rather than being a class name that silently compiles to nothing, which is the failure mode this repo has hit before with the spacing tokens. So I am not writing a speculative layout change I cannot measure. Instead the test gains the one assertion that is missing from an otherwise complete chain -- that the name link is the item allowed to shrink -- and QA confirms the 360px behaviour against a live browser, which is the only place it is observable. One correction to the review's premises: finding (3) asserts the repo is otherwise consistent about trailing newlines. It is not. I swept every tracked .ts/.tsx/.mjs/.json/.css file and 44 of them end without one, including package.json, eslint.config.mjs and all of src/. Fixing the three files this ticket touches is still right -- they are the ones about to be edited again -- but the repo-wide inconsistency is a separate, larger decision and is deliberately not swept up here.",
+    "root_cause": "Three independent causes, one per file finding. (1) The BUG-4 guard matches a ceiling syntax rather than the concept: /max-w-\\[\\d/ encodes \"a bracketed max-width whose value starts with an ASCII digit\", but the intent is \"no max-width ceiling on the display name\". Every bracket-valued Tailwind max-width is written with a bracket, so the digit is an unnecessary narrowing. (2) The test fixture passes an element as Shell's children that duplicates an element Shell already renders, so the fixture asserts against a DOM shape the application never produces and that validateDOMNesting does not warn about. (3) The three files were written without a final newline and nothing in the toolchain enforces one -- eslint.config.mjs sets no eol-last rule and npm run sdlc:verify passes without it, which I confirmed by running it on main.",
+    "approach": "Three small edits, all in files this ticket already rewrites. In tests/components/ui.test.tsx, widen the BUG-4 guard from /max-w-\\[\\d/ to /max-w-\\[/ so every bracketed ceiling is caught, and add one adjacent assertion that the name link itself does not carry `shrink-0` -- that is the half of the shrink chain the QA overflow depends on and the existing test does not cover it. Replace the fixture's `<main />` with a `<div />` so the composition matches what the product renders; the five assertions in that case read only the top bar and the nav, so any inert child works. Finally, append a trailing newline to src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx. No product behaviour changes and no CSS changes: the top bar's markup already carries the full shrink chain, and adding a ceiling to fix the QA item would reintroduce BUG-4, which is exactly what the widened guard now prevents. The QA overflow is settled in the browser, not on paper: AC-1 below measures it directly.",
+    "files": [
+      {
+        "path": "tests/components/ui.test.tsx",
+        "action": "edit",
+        "change": "Three edits. (1) At line 307, change `expect(nameLink.className).not.toMatch(/max-w-\\[\\d/)` to `expect(nameLink.className).not.toMatch(/max-w-\\[/)`, and amend the comment above it to say the guard catches any bracketed value rather than only one beginning with a digit -- the comment currently claims to be \"the permanent guard against one coming back\", which is only true after this change. (2) At line 294, replace the child element `<main />` with `<div />` so the composition does not nest a main inside the `<main id=\"main\">` Shell already renders. (3) Add one assertion to the same case, immediately after the existing `expect(document.querySelector('nav form')?.className).toContain('shrink-0')` line: assert that the name link's own className does NOT contain `shrink-0`, with a comment recording that shrink-0 on the siblings is only half the chain -- the name link must be the item that gives ground, and this is the assertion whose absence leaves the QA overflow unguarded in CI. Finally, append a trailing newline to the end of the file.",
+        "why": "Findings 1 and 2 both live in this file. The narrowed regex is the reviewer's finding 1 verbatim and the fixture is finding 2 verbatim; the extra assertion is the missing half of the chain that finding 5 depends on. Adding a newline keeps the next unrelated diff on this file from showing a spurious final-line change."
+      },
+      {
+        "path": "src/components/ui/top-bar.tsx",
+        "action": "edit",
+        "change": "Append a single trailing newline to the end of the file. The last bytes are currently `);\\n}` with no final newline (verified: `tail -c 1 | xxd -p` returns 7d, not 0a). No other byte of this file changes.",
+        "why": "Finding 3. The file is in this ticket's diff and the repo has no gate that catches a missing final newline, so without this the next unrelated diff shows a spurious last-line change."
+      },
+      {
+        "path": "src/components/shell.tsx",
+        "action": "edit",
+        "change": "Append a single trailing newline to the end of the file. The last bytes are currently `);\\n}` with no final newline (verified the same way). No other byte of this file changes.",
+        "why": "Finding 3, same reason as top-bar.tsx."
+      }
+    ],
+    "tests": [
+      {
+        "path": "tests/components/ui.test.tsx",
+        "action": "edit",
+        "cases": [
+          "the display-name link carries no bracketed max-width, so a ceiling written as max-w-[9rem], max-w-[120px] or max-w-[--cap] is caught as well as a digit-valued one",
+          "the Shell fixture composition contains exactly one <main> and no <main> nested inside another <main>",
+          "the display-name link does not carry shrink-0, so it remains the flex item that gives ground at 360px while its siblings stay pinned"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "check": "At a 360x640 viewport, with the display name set to Wolfeschlegelsteinhausenbergerdorffenfun, documentElement.scrollWidth equals documentElement.clientWidth (360) on both / and /settings, and the display name is visibly truncated with an ellipsis rather than pushing the sign-out control off screen",
+        "how_to_verify": "Sign in, save that name on /settings, set the viewport to 360x640, and read document.documentElement.scrollWidth and .clientWidth on / and on /settings. This is the browser-only measurement of the QA finding; jsdom computes no layout, so no test can stand in for it. If scrollWidth still exceeds clientWidth, the shrink chain is not sufficient and this needs a real layout change rather than an assertion -- file that as a new bug rather than weakening the criterion.",
+        "source": "TR-24",
+        "verify": "browser"
+      },
+      {
+        "id": "AC-2",
+        "check": "The BUG-4 regression guard rejects every bracketed max-width on the display-name link, not only one whose value begins with an ASCII digit",
+        "how_to_verify": "The tests[] case 'the display-name link carries no bracketed max-width'. To confirm the guard is real rather than decorative, temporarily set the name link's className to include max-w-[9rem] and confirm the suite fails, then revert.",
+        "source": "TR-24",
+        "verify": "test"
+      },
+      {
+        "id": "AC-3",
+        "check": "The Shell composition in the test suite renders exactly one <main> element, with no <main> descendant of another <main>",
+        "how_to_verify": "The tests[] case 'the Shell fixture composition contains exactly one <main>'. React logs no validateDOMNesting warning for main-in-main, so this is asserted structurally rather than watched for in the console.",
+        "source": "TR-24",
+        "verify": "test"
+      },
+      {
+        "id": "AC-4",
+        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green",
+        "how_to_verify": "tail -c 1 on each of the three files, piped through xxd -p, returns 0a. Then npm run sdlc:verify (tsc --noEmit, eslint, vitest run) passes -- it is green on main today at 7 files and 86 tests, so the count must not drop.",
+        "source": "TR-24",
+        "verify": "test"
+      }
+    ],
+    "qa_script": [
+      "Sign in and set the display name to Wolfeschlegelsteinhausenbergerdorffenfun on /settings.",
+      "Set the viewport to 360x640 and load /. Read document.documentElement.scrollWidth and .clientWidth -- these must be equal (AC-1).",
+      "Confirm the name in the top bar shows a trailing ellipsis and that the Groups link and the Sign out button are both fully visible and still at least 44px tall.",
+      "Set the viewport to 1280x800 and confirm the same name renders in full with no ellipsis -- the fix must not reintroduce BUG-4, a ceiling that truncated an ordinary 29-character name on a wide header.",
+      "Confirm no console errors on either page.",
+      "Run npm run sdlc:verify and confirm 86 tests still pass."
+    ],
+    "risks": [
+      "AC-1 is the one criterion I could not satisfy myself. Chromium is installed at /usr/bin/chromium but launches hang or die during dbus/GCM initialisation in this environment and no remote-debugging port binds, so the QA finding's measurement could not be reproduced or refuted here. The change is written so that if AC-1 fails, the failure is honest and specific rather than masked: the new assertion that the name link is not shrink-0 and the widened guard both stay green, so a QA failure on AC-1 points at the layout and not at a weakened test. Do not widen the acceptance to match a failing measurement.",
+      "AC-2's guard catches a bracketed Tailwind max-width only. An inline style={{maxWidth:'120px'}}, a CSS rule in globals.css, or a container-class ceiling would still pass it, and the reviewer raised the same limit. A general ceiling detector is out of scope for this ticket; the browser-verified AC-1 is what decides the real behaviour.",
+      "The dead `.max-w-\\[120px\\]{max-width:120px}` rule stays in the built stylesheet, because Tailwind scans the test file's own comment text and finds the class name there. It applies to no element and affects no layout, so this change leaves it alone rather than rewording a comment to satisfy the scanner.",
+      "The repository currently has 44 tracked source and config files with no trailing newline -- this is a three-file fix, not a repo-wide one, so the inconsistency remains everywhere else. That is deliberate (see out_of_scope) and must not be silently widened.",
+      "No file in forbidden_paths is touched. No new host is added, so env.api_allowlist (localhost and 127.0.0.1 only) still covers everything the change makes the app do."
+    ],
+    "out_of_scope": [
+      "The repo-wide trailing-newline inconsistency. I swept every tracked .ts/.tsx/.mjs/.json/.css file and 44 lack a final newline, including package.json, eslint.config.mjs and all of src/ -- which contradicts the review's statement that the repo is otherwise consistent. Adding an eol-last rule to eslint.config.mjs and reformatting 44 files is a separate change with its own diff to review, and doing it inside this ticket would bury three small edits.",
+      "A general ceiling detector that catches an inline style or a CSS rule, not just a bracketed Tailwind class. The reviewer explicitly left this out of scope and AC-1 covers the real behaviour in a browser.",
+      "Re-wording the test file's comment to stop Tailwind emitting the dead .max-w-[120px] rule. It is harmless bundle noise and touching the comment would trade clarity for a cosmetic byte.",
+      "The review's finding 4, scope reconciliation, which asks for no code change -- it is a note about how the 58-file PR should be reviewed, not a defect.",
+      "Splitting the sign-out control into the profile menu docs/ui.md describes. shell.tsx says so itself and this ticket is not the place for it."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Fix the QA overflow by adding a max-width ceiling to the name link, as BUG-4 originally did",
+        "rejected_because": "This reintroduces the exact defect the previous round removed. A fixed ceiling applies at every viewport, which is what truncated an ordinary 29-character name on a 1280px header with 1160px free, and it is what the widened guard in this plan is written to prevent."
+      },
+      {
+        "approach": "Drop the QA finding on the grounds that the shrink chain (min-w-0 on the nav, shrink-0 on the siblings, min-w-[44px] on the name, truncate on its span) already exists on main and reads as sufficient",
+        "rejected_because": "That reasoning is unverified: I could not run a browser, and this repo has been bitten before by a class that reads correctly and compiles to no rule (the spacing tokens). Dropping a QA-reported defect on a reading rather than a measurement is the failure mode the ticket warns about, so the finding is carried as AC-1 and settled by the stage that can actually measure it."
+      },
+      {
+        "approach": "Write a layout change for the QA overflow on the theory that min-w-0 is missing somewhere",
+        "rejected_because": "min-w-0 is present at src/components/ui/top-bar.tsx:23 and the whole chain is emitted in the production CSS. A speculative edit to a layout I cannot measure would add a real risk of regression -- including the BUG-4 regression -- for no evidence that it was needed."
+      },
+      {
+        "approach": "Add an eol-last ESLint rule and reformat all 44 files without a trailing newline",
+        "rejected_because": "Large, unrelated diff riding on a three-finding ticket. The three files this ticket touches are fixed here; the rest is named in out_of_scope so a human can decide to file it separately."
+      },
+      {
+        "approach": "Fix only the test fixture and the regex, and leave the newlines",
+        "rejected_because": "The newline change is one byte per file on files this ticket is already rewriting, it costs no review budget, and it removes a spurious final-line change from the next unrelated diff on tests/components/ui.test.tsx."
+      }
+    ],
+    "assumptions": [
+      "The four review findings were written against the PR as it merged, and PR #13 is main at 6c423f4, so reading main is reading the code the findings describe.",
+      "tests/components/ui.test.tsx line 307 is the BUG-4 guard and line 294 is the Shell fixture; both line numbers were confirmed against the file on main."
+    ],
+    "unknowns": [
+      "Whether the QA overflow still reproduces on current main. The markup suggests the chain that prevents it is present, but I had no browser and did not measure it. AC-1 resolves this.",
+      "Whether the 44-file trailing-newline inconsistency is deliberate. Nothing in eslint.config.mjs or the conventions file mentions it either way."
+    ],
+    "residual_risks": [
+      "The widened guard is a syntax match, not a semantic one: it catches any bracketed max-width on the name link, but not an inline style={{maxWidth:'120px'}} or a CSS rule in globals.css. This is a disclosed limit, carried forward from the review, and AC-1 is the criterion that actually decides the behaviour.",
+      "AC-1 cannot be satisfied by any CI test. jsdom computes no layout and returns 0x0 for getBoundingClientRect on every element, so if QA does not run it in a real browser, the QA finding is neither confirmed fixed nor confirmed open."
+    ]
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T10:20:10.870Z",
+  "validated_ac_changes": []
 }
