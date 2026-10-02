@@ -203,7 +203,7 @@
     "decided_at": "2026-10-02T20:23:13.055Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "implement",
+  "dispatched_stage": "review",
   "validated_from": "plan",
   "validated_at": "2026-10-02T20:25:56.199Z",
   "validated_ac_changes": [],
