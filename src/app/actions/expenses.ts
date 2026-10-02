@@ -298,10 +298,11 @@ function validateExpense(input: {
       fieldErrors[`input.${member.memberId}`] ??= parsed.message;
       return { memberId: member.memberId, value: 0n };
     }
-    // Only an exact input is money in minor units, held in input_value exactly as it was
-    // typed, so it carries the same bound as the total and the payer parts. A percentage or a
-    // share count is a weight, not an amount.
-    if (splitType === 'exact' && parsed.value > MAX_INT8) {
+    // An exact input is money in minor units and a share count is a plain count, and BOTH are
+    // held in input_value exactly as they were typed — so both carry the same bound as the total
+    // and the payer parts. A percentage needs no bound of its own: any oversized one fails the
+    // sum-to-100% check below before the insert, so it can never reach Postgres.
+    if ((splitType === 'exact' || splitType === 'shares') && parsed.value > MAX_INT8) {
       fieldErrors[`input.${member.memberId}`] ??= 'That amount is too large to record.';
       return { memberId: member.memberId, value: 0n };
     }

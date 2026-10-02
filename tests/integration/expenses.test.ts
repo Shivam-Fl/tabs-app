@@ -704,6 +704,44 @@ describe('amounts the columns cannot hold', () => {
     expect(await rowCounts()).toEqual(nothing);
   });
 
+  it('refuses a share count above the int8 maximum beside that member’s field (AC-1)', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId } = await groupWithThree();
+
+    // A share count is not an amount, but it is stored just as verbatim: input_value is int8, so
+    // a count above the maximum reaches the insert and raises out-of-range rather than a sentence.
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'shares',
+      participants: [ownerMemberId, samMemberId],
+      inputs: { [ownerMemberId]: '1', [samMemberId]: '99999999999999999999999' },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That amount is too large to record.');
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('accepts a share count of exactly the int8 maximum, and stores it exactly (AC-2)', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId } = await groupWithThree();
+
+    // The bound is above-max, not at-max: 9223372036854775807 is a count that fits.
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'shares',
+      participants: [ownerMemberId, samMemberId],
+      inputs: { [ownerMemberId]: '1', [samMemberId]: INT8_MAX_MINOR.toString() },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result).toEqual({ ok: true, groupId });
+    const rows = await db.select().from(expenseSplitInput);
+    const byMember = new Map(rows.map((row) => [row.memberId, row.inputValue]));
+    expect(byMember.get(samMemberId)).toBe(INT8_MAX_MINOR);
+  });
+
   it('accepts an amount of exactly the int8 maximum, and stores it exactly (AC-4)', async () => {
     const { owner, groupId, ownerMemberId } = await groupWithThree();
     // The bound is above-max, not at-max: €92,233,720,368,547,758.07 is 9223372036854775807.
