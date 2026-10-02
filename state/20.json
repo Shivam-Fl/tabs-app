@@ -304,7 +304,31 @@
   "implemented_version": 1,
   "follow_ups": {
     "review": [],
-    "pr": "21"
+    "pr": "21",
+    "qa": [
+      {
+        "actual": "Both /groups/:id and /groups/:id/members answer HTTP 200 while rendering the 'This group isn't available.' not-found UI. No group data and no group name leak (screenshots prove it) — only the wire status disagrees with TR-1's 'receives 404'.",
+        "evidence": [
+          "qa-evidence/T-4-status.json",
+          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/test-finished-1.png",
+          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/test-finished-2.png",
+          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/trace.zip"
+        ],
+        "expected": "A signed-in non-member opening /groups/:id or /groups/:id/members receives HTTP 404 (TR-1: 'A non-member receives 404 and no data').",
+        "id": "BUG-1",
+        "introduced_by_pr": false,
+        "repro": [
+          "Sign up as user A and create a group; note its /groups/:id/members URL.",
+          "In a clean browser context, sign up as user B.",
+          "As B, open A's members URL and A's overview URL.",
+          "Observe the not-found UI in both cases, but HTTP 200 on the wire (see T-4-status.json)."
+        ],
+        "reproducible": "always",
+        "severity": "minor",
+        "suspected_cause": "The members and group pages still call notFound() on a null read (members page checks group/membership/members and calls notFound; that file is untouched by this diff, which only changed readMembers internals). The 200 is how the framework answers that notFound call on this navigation, not a change in the authorisation logic — nothing protected is rendered.",
+        "title": "Non-member group URLs render the not-found UI but answer HTTP 200 instead of 404"
+      }
+    ]
   },
   "qa": {
     "verdict": "blocked",
