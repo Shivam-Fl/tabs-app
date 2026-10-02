@@ -1,7 +1,7 @@
 {
   "issue": 3,
   "pr": 13,
-  "state": "planning",
+  "state": "needs-human",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -296,7 +296,7 @@
   ],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:09.497Z",
-  "updated_at": "2026-10-02T07:25:49.540Z",
+  "updated_at": "2026-10-02T07:32:46.118Z",
   "history": [
     {
       "at": "2026-10-01T22:24:13.057Z",
@@ -597,6 +597,11 @@
       "at": "2026-10-02T07:25:49.540Z",
       "agent": "root-cause",
       "action": "lock released"
+    },
+    {
+      "at": "2026-10-02T07:32:46.118Z",
+      "agent": "triage",
+      "action": "-> needs-human"
     }
   ],
   "epic": 1,
