@@ -2,6 +2,7 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import RootLayout from '@/app/layout';
 import { Shell } from '@/components/shell';
 import { AuthForm } from '@/components/auth-form';
 import { HomeEmpty } from '@/components/home-empty';
@@ -251,5 +252,54 @@ describe('every link is a 44px target', () => {
     expect(crossLink.className).toContain('min-h-[44px]');
     expect(crossLink.className).toContain('min-w-[44px]');
     expect(crossLink.className).toContain('inline-flex');
+  });
+});
+
+/**
+ * The touch-target markup jsdom cannot measure, for the two controls that were wrong.
+ *
+ * The same caveat as above applies with more force: jsdom computes no layout and returns 0x0
+ * for every element, so nothing here reads getBoundingClientRect(). These assert the CLASSES
+ * that produce a 44px target and a bounded width, never a measured size. The measured claims
+ * are AC-13 and AC-14, which are browser-only and cannot be duplicated here — a later reader
+ * must not "strengthen" these into layout assertions that would return zero regardless of
+ * whether the code is right.
+ */
+describe('the touch-target markup, which jsdom cannot measure', () => {
+  it('the skip link carries both minimums, is not a bare inline anchor, and is not positioned', () => {
+    render(
+      <RootLayout>
+        <main id="main" />
+      </RootLayout>,
+    );
+
+    // RootLayout reaches no database — it renders /sign-in and /sign-up for a signed-out
+    // visitor — which is why it is safe to render here rather than opening src/db.
+    const skipLink = screen.getByRole('link', { name: 'Skip to content' });
+    expect(skipLink.className).toContain('focus:min-h-[44px]');
+    expect(skipLink.className).toContain('focus:min-w-[44px]');
+    expect(skipLink.className).toContain('focus:items-center');
+    expect(skipLink.className).toContain('focus:inline-flex');
+
+    // The negative half is the point. focus:not-sr-only already sets position: static and
+    // focus:absolute sorted later in the utilities layer and put the link on top of the
+    // brand link at dx=0 dy=0. Adding the minimums alone would fix the height and leave the
+    // overlap, and this is the half a later edit reinstates out of habit.
+    expect(skipLink.className).not.toMatch(/focus:absolute|focus:left-space-|focus:top-space-/);
+  });
+
+  it('a one-word display name is capped, truncated and shrinkable', () => {
+    render(<TopBar user={{ displayName: 'Wolfeschlegelsteinhausenbergerdorffenfun' }} />);
+
+    // All three are needed and none alone is enough: the span is what makes the ellipsis
+    // render (text-overflow does not reliably apply to a flex container's own text), the
+    // max-width is what bounds the item's min-content contribution, and min-w-0 on the nav
+    // is what lets the row shrink at all.
+    const nameLink = screen.getByRole('link', { name: 'Wolfeschlegelsteinhausenbergerdorffenfun' });
+    expect(nameLink.className).toContain('max-w-[120px]');
+    expect(within(nameLink).getByText('Wolfeschlegelsteinhausenbergerdorffenfun').className).toContain(
+      'truncate',
+    );
+    expect(document.querySelector('nav')?.className).toContain('min-w-0');
   });
 });

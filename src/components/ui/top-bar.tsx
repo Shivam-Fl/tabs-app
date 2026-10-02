@@ -20,15 +20,21 @@ export function TopBar({
       <Link href="/" className="inline-flex min-h-[44px] min-w-[44px] items-center font-medium">
         Tabs
       </Link>
-      <nav aria-label="Main" className="flex items-center gap-space-3">
+      <nav aria-label="Main" className="flex min-w-0 items-center gap-space-3">
         <Link href="/" className="min-h-[44px] leading-[44px] text-base">
           Groups
         </Link>
         {/* The display name is user-supplied, so its width is not knowable here: "Jo" renders
-            15px wide and "Priya" 40px, both under the 44px minimum. Same three utilities as
-            the brand link for the same reason — min-width has to be asserted, not assumed. */}
-        <Link href="/settings" className="inline-flex min-h-[44px] min-w-[44px] items-center text-base">
-          {user.displayName}
+            15px wide and "Priya" 40px, both under the 44px minimum, and a legal one-word name
+            renders 318px and pushes the page sideways. Same three utilities as the brand link
+            for the same reason — min-width has to be asserted, not assumed — plus a ceiling:
+            the span is what makes the ellipsis render, and the max-width is what bounds this
+            item's min-content contribution, without which the row cannot shrink at all. */}
+        <Link
+          href="/settings"
+          className="inline-flex min-h-[44px] min-w-[44px] max-w-[120px] items-center text-base"
+        >
+          <span className="truncate">{user.displayName}</span>
         </Link>
         {action}
       </nav>
