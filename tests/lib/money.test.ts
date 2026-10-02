@@ -5,8 +5,11 @@ import { describe, expect, it } from 'vitest';
 import { expenseSplitTypes } from '@/db/schema';
 import {
   currencySymbol,
+  formatDecimalUnits,
+  formatMajorUnits,
   formatMinor,
   formatPercent,
+  formatSplitInput,
   parseMajorUnits,
   parsePercent,
   split,
@@ -428,6 +431,66 @@ describe('the split invariant, over 10,000 random expenses', () => {
     // Five is enough to see the shape of a failure without printing ten thousand lines.
     expect(failures.slice(0, 5)).toEqual([]);
     expect(accepted).toBe(10_000);
+  });
+});
+
+/**
+ * The inverse formatters, and the round trip that is the whole reason they exist.
+ *
+ * The edit screen opens a stored expense as TEXT and Save parses that text back. So the one thing
+ * these have to satisfy is that the text they produce is text the parser ACCEPTS and reads back to
+ * the same minor units — for a grouped amount somebody typed, for a currency with no decimal
+ * places, and above Number.MAX_SAFE_INT, where the obvious `Number(text) * 100` loses the amount.
+ * A formatter that emitted '€1,234.00' would reopen an expense that refuses its own unchanged
+ * amount (AC-2, AC-6).
+ */
+describe('stored numbers back to editable text', () => {
+  it('renders minor units as a plain number, with no symbol and no grouping separator', () => {
+    expect(formatDecimalUnits(1234n, 2)).toBe('12.34');
+    expect(formatDecimalUnits(0n, 2)).toBe('0');
+    expect(formatDecimalUnits(-1234n, 2)).toBe('-12.34');
+    // Above 2^53 the float route renders a different number from the one that was stored.
+    expect(formatDecimalUnits(123456789012345678n, 2)).toBe('1234567890123456.78');
+  });
+
+  it('trims trailing zeros so the shortest form is shown', () => {
+    // '12.30' and '12.3' parse to the same 1230, and the shorter one is what a person typed.
+    expect(formatDecimalUnits(1230n, 2)).toBe('12.3');
+    expect(formatDecimalUnits(1200n, 2)).toBe('12');
+    expect(formatDecimalUnits(50n, 2)).toBe('0.5');
+  });
+
+  it('renders a currency in its own number of decimal places', () => {
+    expect(formatMajorUnits(1234n, 'EUR')).toBe('12.34');
+    // JPY has no minor unit: 1234 is ¥1,234, and '1234' is what the field must hold.
+    expect(formatMajorUnits(1234n, 'JPY')).toBe('1234');
+    expect(formatMajorUnits(1234567n, 'BHD')).toBe('1234.567');
+  });
+
+  it('round-trips through the parser, which is what reopening an expense does', () => {
+    for (const currency of ['EUR', 'JPY', 'BHD']) {
+      for (const text of ['0.01', '12.30', '1234.56', '0.5', '1234567890123456.78']) {
+        const parsed = parseMajorUnits(text, currency);
+        if (!parsed.ok) continue; // JPY refuses a decimal amount, and nothing here stores one.
+        const again = parseMajorUnits(formatMajorUnits(parsed.minor, currency), currency);
+        expect(again, `${text} in ${currency}`).toEqual({ ok: true, minor: parsed.minor });
+      }
+    }
+  });
+
+  it('renders a split input in the unit its split type counts in', () => {
+    // An equal split has no number at all, and neither has a member who is not in it: the field
+    // stays empty rather than being filled with a zero the person never typed.
+    expect(formatSplitInput('equal', null, 'EUR')).toBe('');
+    expect(formatSplitInput('exact', null, 'EUR')).toBe('');
+
+    expect(formatSplitInput('exact', 1234n, 'EUR')).toBe('12.34');
+    expect(formatSplitInput('exact', 1234n, 'JPY')).toBe('1234');
+    // Hundredths of a percent: 3333 is '33.33', and 2500 is '25' rather than '25.00'.
+    expect(formatSplitInput('percentage', 3333n, 'EUR')).toBe('33.33');
+    expect(formatSplitInput('percentage', 2500n, 'EUR')).toBe('25');
+    // A plain count, whatever the currency.
+    expect(formatSplitInput('shares', 3n, 'EUR')).toBe('3');
   });
 });
 

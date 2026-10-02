@@ -267,6 +267,22 @@ export type ActivitySubjectType = (typeof activitySubjectTypes)[number];
  * change (TR-17). The `group.*` kinds are lifecycle, not spending, which is why the overview's
  * recent-activity block excludes them: a brand-new group would otherwise show "you created
  * this group" where the criterion requires "Nothing here yet".
+ *
+ * `expense.edited`'s detail names only the fields that MOVED, each as `{ from, to }` — so a save
+ * that changed the amount and nothing else says so, and an untouched save carries an empty
+ * object rather than a claim that something happened that did not:
+ *
+ *   { description: { from, to }, amountMinor: { from: '1000', to: '2000' }, date, category,
+ *     note, splitType, payers: { from: [{ memberId, amountMinor }], to: [...] },
+ *     participants: { from: [{ memberId, inputValue }], to: [...] } }
+ *
+ * Every money value inside is a STRING of minor units, for the reason the `detail` column gives
+ * below. `payers` and `participants` are lists in the group's canonical member order, so a
+ * reordered submission is not a change.
+ *
+ * `expense.deleted` carries the expense as it was — description, amountMinor, currency — because
+ * the entry outlives the thing it names: the parent row is soft-deleted and every read filters
+ * it out, so the feed could not otherwise say what was removed.
  */
 export const activityKinds = [
   'group.created',
@@ -280,6 +296,8 @@ export const activityKinds = [
   'member.placeholder_added',
   'member.claimed',
   'expense.added',
+  'expense.edited',
+  'expense.deleted',
 ] as const;
 
 export type ActivityKind = (typeof activityKinds)[number];
