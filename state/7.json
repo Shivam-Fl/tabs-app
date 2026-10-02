@@ -419,7 +419,16 @@
   "work_order_comment": "5961152970",
   "implemented_version": 1,
   "follow_ups": {
-    "review": [],
+    "review": [
+      {
+        "title": "A shares split input has no int8 bound, so a share count above 9223372036854775807 passes validation and reaches the insert into expense_split_input.input_value (bigint/int8), where Postgres raises out-of-range and the action answers 500 instead of a field sentence. Amount, payer parts and exact inputs are all refused with 'too large to record' (MAX_INT8 checks in validateExpense), and percentage inputs are bounded by the sum==10000 rule, so shares is the only unbounded stored number.",
+        "detail": "A shares split input has no int8 bound, so a share count above 9223372036854775807 passes validation and reaches the insert into expense_split_input.input_value (bigint/int8), where Postgres raises out-of-range and the action answers 500 instead of a field sentence. Amount, payer parts and exact inputs are all refused with 'too large to record' (MAX_INT8 checks in validateExpense), and percentage inputs are bounded by the sum==10000 rule, so shares is the only unbounded stored number.\n\n`src/app/actions/expenses.ts:273`\n\nEvidence: src/db/schema.ts:251 inputValue is bigint('input_value') (int8, max ~9.2e18); src/lib/money.ts parseDecimal builds the value with BigInt over an arbitrary-length digit string with no length bound; src/app/actions/expenses.ts validateExpense bounds splitType==='exact' inputs against MAX_INT8 but has no bound for 'shares' (shares-sum-zero is the only check, and any positive total is accepted); insertExpenseChildRows writes rows.inputs verbatim. Submit input.<memberId>='99999999999999999999999' on a shares expense to reproduce. Same hole pre-exists on the create path, so this extends it to update rather than introducing it.\n\nFix: Refuse a shares input above MAX_INT8 with the same per-field sentence the exact path uses, mirroring the splitType==='exact' check onto 'shares' (percentages need none: they must sum to exactly 10000)."
+      },
+      {
+        "title": "tests/lib/money.test.ts is edited by this PR but appears in neither the work order's files[] nor its tests[]. The addition is benign — unit coverage for the new in-scope formatDecimalUnits/formatMajorUnits/formatSplitInput helpers in src/lib/money.ts, overlapping the round-trip case the work order assigns to the integration suite — so no rework is asked for; it is recorded here so the scope check shows it was seen.",
+        "detail": "tests/lib/money.test.ts is edited by this PR but appears in neither the work order's files[] nor its tests[]. The addition is benign — unit coverage for the new in-scope formatDecimalUnits/formatMajorUnits/formatSplitInput helpers in src/lib/money.ts, overlapping the round-trip case the work order assigns to the integration suite — so no rework is asked for; it is recorded here so the scope check shows it was seen.\n\n`tests/lib/money.test.ts:437`\n\nEvidence: gh pr diff 29 --name-only lists 15 files; work-order files[] lists 11 src files and tests[] lists 3 test files (expenses-edit, expense-form, expense-list). The 15th diff file, tests/lib/money.test.ts (+63 lines: 'stored numbers back to editable text' describe block), is in neither list. Its cases cover only the new helpers added to src/lib/money.ts, which is in files[].\n\nFix: Accept as-is, or record tests/lib/money.test.ts in the work order's tests; no code change needed."
+      }
+    ],
     "pr": "29"
   },
   "qa": {
