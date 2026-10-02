@@ -351,5 +351,26 @@
       }
     ],
     "pr": "18"
-  }
+  },
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 1,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5"
+    ],
+    "sha": "e709a0e6b0414059f291752e70f2acc3a263ceb7",
+    "run_id": "37007937278",
+    "work_order_version": 1,
+    "at": "2026-10-02T13:20:23.880Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "This PR's explanatory comment adds two dead Tailwind rules to the production stylesheet"
+    }
+  ]
 }
