@@ -641,6 +641,88 @@ describe('what an expense is checked against', () => {
   });
 });
 
+describe('amounts the columns cannot hold', () => {
+  /**
+   * The figure from the review: parseMajorUnits reads it without complaint — parseDecimal builds
+   * the whole part with BigInt — while amount_minor, expense_payer.amount_minor and
+   * expense_split_input.input_value are int8. Without the bound it reached the insert, and
+   * Postgres raised out-of-range: an uncaught 500 instead of a sentence beside a field.
+   */
+  const HUGE = '123456789012345678901234567890.12';
+  const INT8_MAX_MINOR = 9223372036854775807n;
+  const nothing = { expenses: 0, payers: 0, shares: 0, inputs: 0, activity: 0 };
+
+  it('refuses an amount above the int8 maximum beside the amount field (AC-1)', async () => {
+    const { owner, groupId, ownerMemberId } = await groupWithThree();
+
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: HUGE,
+      participants: [ownerMemberId],
+      payers: [{ memberId: ownerMemberId, amount: HUGE }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.amount).toBe('That amount is too large to record.');
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('refuses a payer part above the int8 maximum beside the payers block, naming the payer (AC-2)', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId, canonical } = await groupWithThree();
+
+    // The total is fine and the FIRST payer covers it exactly; it is the second part that
+    // cannot be stored, so the refusal has to be about that payer rather than about the sum.
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      participants: canonical,
+      payers: [
+        { memberId: ownerMemberId, amount: '10' },
+        { memberId: samMemberId, amount: HUGE },
+      ],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.payers).toBe("Sam's part is too large to record.");
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('refuses an exact input above the int8 maximum beside that member’s field (AC-3)', async () => {
+    const { owner, groupId, ownerMemberId, samMemberId } = await groupWithThree();
+
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: '10',
+      splitType: 'exact',
+      participants: [ownerMemberId, samMemberId],
+      inputs: { [ownerMemberId]: '10', [samMemberId]: HUGE },
+      payers: [{ memberId: ownerMemberId, amount: '10' }],
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That amount is too large to record.');
+    expect(await rowCounts()).toEqual(nothing);
+  });
+
+  it('accepts an amount of exactly the int8 maximum, and stores it exactly (AC-4)', async () => {
+    const { owner, groupId, ownerMemberId } = await groupWithThree();
+    // The bound is above-max, not at-max: €92,233,720,368,547,758.07 is 9223372036854775807.
+    const atMax = '92233720368547758.07';
+
+    const result = await recordAs(owner.cookies, {
+      groupId,
+      amount: atMax,
+      participants: [ownerMemberId],
+      payers: [{ memberId: ownerMemberId, amount: atMax }],
+    });
+
+    expect(result).toEqual({ ok: true, groupId });
+    const [expense] = await db.select().from(expenses);
+    expect(expense?.amountMinor).toBe(INT8_MAX_MINOR);
+    expect((await db.select().from(expensePayer))[0]?.amountMinor).toBe(INT8_MAX_MINOR);
+  });
+});
+
 describe('the category and the note', () => {
   it('round-trips a category and leaves an unset one null rather than empty', async () => {
     const { owner, groupId, ownerMemberId } = await groupWithThree();
