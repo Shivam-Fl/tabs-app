@@ -114,15 +114,16 @@ jobs:
         continue-on-error: true
         timeout-minutes: 15
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        # Through the translator when a bridged model is named, as an agent job would run it.
         env:
-          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
-          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+          ANTHROPIC_BASE_URL: ${{ inputs.bridge != '' && 'http://127.0.0.1:4000' || steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ inputs.bridge == '' && steps.prov.outputs.headers || '' }}
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
-          settings: ${{ steps.prov.outputs.settings }}
+          settings: ${{ inputs.bridge == '' && steps.prov.outputs.settings || '' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           allowed_bots: "github-actions"
-          claude_args: --model ${{ inputs.models }} --allowedTools Bash,Read --json-schema '${{ steps.schema.outputs.json }}'
+          claude_args: --model ${{ inputs.bridge != '' && inputs.bridge || inputs.models }} --allowedTools Bash,Read --json-schema '${{ steps.schema.outputs.json }}'
           prompt: |
             Count the files under .sdlc/schemas with Bash. Then answer as a stop: kind
             "needs-decision", and a reason that names how many schema files there are.
