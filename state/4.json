@@ -126,5 +126,428 @@
       "run_url": "https://github.com/Shivam-Fl/tabs-app/actions/runs/36991709263",
       "prior_signatures": []
     }
-  }
+  },
+  "validated_work_order": {
+    "issue": 4,
+    "version": 2,
+    "understanding": "Issue #4 is piece 2 of the epic in #1: the group row and its membership, plus every screen that reads them. It depends on #3, which is merged, so users, sessions and the hand-rolled auth seam are in place. What does not exist is everything group-shaped: src/db/schema.ts has only users, sessions and login_attempts; src/app/(app)/page.tsx renders an unconditional HomeEmpty and says in its own docblock that there are no groups in this ticket; src/components/home-empty.tsx says 'no group table, so this renders no query at all'; src/components/ui/dialog.tsx says 'No caller yet: destructive confirmations arrive with piece 2's destructive actions' — piece 2 is this issue. The two named decisions on the ticket are taken as written: exactly one owner per group, who is also a member row, and removal sets removed_at rather than deleting the row. A third contract stated in the ticket body is honoured here: the group row carries invite_token and invite_enabled, written now and used by piece 3 (#5); and members.user_id must be nullable so a placeholder member can exist before it has an account.\n\nplan/brief.md records no rejection of a plan for this issue, so there are no objections to answer. The one recorded decision is a replan-project route note on epic #1 by @Shivam-Fl dated 2026-10-01; both of its changes are in the expense money core (store the split rule with the expense; rewrite TR-4 so an edit can move a balance). Neither touches this ticket, which has no expenses.\n\nTR-1 is load-bearing and the plan is built around it: authorisation is a membership join inside the query, not a check that can be forgotten. I re-verified the two shapes that carry it against PGlite in this repository rather than taking the proposal's word for them, and both hold.",
+    "root_cause": "Not a defect. The group, membership and activity tables do not exist, so there is no way to create a group, no way to see one, and no membership to scope a query by.",
+    "approach": "Four layers in dependency order.\n\nSchema: one edit to src/db/schema.ts plus one generated migration adding group_type ('trip','home','couple','other'), groups, members and activity. Three index choices are deliberate. (a) members gets a partial unique index on (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL — see the correction below; the AND removed_at IS NULL half is load-bearing, not decorative. (b) members gets a partial unique index on (group_id) WHERE is_owner, turning the ticket's 'exactly one owner per group' decision into a database constraint rather than a convention; verified enforced by PGlite. (c) groups.invite_token is unique, because #5 resolves an invite by that token and the token is written now. Removal sets removed_at and never deletes the row.\n\nThe two library modules: src/lib/access.ts is the authorisation boundary and the only module permitted to read or write group data — requireMember, readGroup, readMembers, listGroupsForUser, and the membership-scoped UPDATE predicates, all built on the self-join / EXISTS shapes. src/lib/activity.ts is the only writer of the feed, typed to take the caller's transaction via `export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0]` (I typechecked this against the PgliteDatabase|NeonDatabase union and it compiles), so it cannot be called outside a transaction. Every mutation and its activity row are written in one db.transaction.\n\nActions: src/app/actions/groups.ts (create, rename, archive) and src/app/actions/members.ts (leave, undoLeave, remove), following src/app/actions/profile.ts exactly — 'use server', Zod per input, a {ok, fieldErrors, formError} result instead of a throw, requireUser() before data is touched, revalidatePath('/', 'layout') after success. Every id is generated with crypto.randomUUID() and passed into .values(), because db.insert(...).returning(...) is an overloaded method and TypeScript resolves the union of the two drivers' overloads to the zero-argument one — documented in src/db/client.ts's own docblock.\n\nScreens: /groups/new, /groups/[id], /groups/[id]/members, a (app)/not-found.tsx for the 404, and a home page that lists the caller's groups instead of rendering HomeEmpty unconditionally. Presentational pieces are split into components/ files so tests can render them without the next/navigation import that makes pages untestable.\n\nThree decisions worth stating outright, because they are choices and not consequences.\n\n1. Who may leave. The recorded invariant is that a group always has exactly one owner, and nothing in this ticket transfers ownership. So leave is refused for the owner, with the ticket's own refusal text: transfer ownership or archive the group. A non-owner may always leave, because the owner is always still there, so the group cannot reach zero members. The screen makes the same call; the write still carries the predicate in its WHERE, so the rule holds even if the screen's rendering is wrong.\n\n2. Undo is authorised by the feed, not by a flag. To undo a leave the caller must prove they left: the UPDATE restores removed_at only WHERE EXISTS (SELECT 1 FROM activity WHERE activity.group_id = members.group_id AND activity.subject_member_id = members.id AND activity.kind = 'member.left' AND activity.actor_id = $me). Verified: rowCount 1 for a genuine self-leave, 0 when someone tries to undo an owner-initiated member.removed. This is why no removal_kind column is needed — the discriminator already lives in the feed, and a second column would be a second source of truth for the same fact.\n\n3. IAC-2 and IAC-9 both bind a brand-new group, and they conflict. IAC-2 requires the overview's recent-activity block to read 'Nothing here yet — add the first expense.'; IAC-9 requires group creation to write exactly one activity entry. So a brand-new group does have an entry and cannot be empty. The overview's block therefore lists what has happened inside the group and excludes the group.* kinds (created, renamed, archived), whose facts the header already shows; a new group has only group.created, so the empty state is what renders. The creation entry is still written and still lands in the feed for #10. This is the one place where a choice was made between two binding sentences.\n\nA fourth, smaller call: an archived group disappears from the home list (IAC-4) but still opens by direct URL and shows 'This group is archived.' A dead link to a group the person still has a membership row for would be worse than a note, and nothing in the ticket says an archived group becomes unreachable.\n\nCORRECTION the arbiter made to the proposal, with evidence. The proposal specified members_group_user_unique as a partial unique index on (group_id, user_id) WHERE user_id IS NOT NULL, and separately listed a test asserting \"the partial unique index permits a new membership for a (group_id, user_id) whose previous row is removed.\" Those two cannot both hold. Because removal sets removed_at and never deletes the row, the predicate as written still covers removed rows, and the re-add fails. I ran it on this repository's own PGlite:\n\n  insert member (g1,u1) -> set removed_at (row retained) -> insert member (g1,u1)\n  => RE-ADD REJECTED: duplicate key value violates unique constraint \"members_group_user_unique\"\n\nThat would also make undoLeave throw rather than restore, and would permanently lock a user out of a group they left and were re-invited to. The predicate must be `WHERE user_id IS NOT NULL AND removed_at IS NULL`. Verified under the corrected predicate: an active duplicate is still rejected, a re-add after removal is allowed, and two user_id-null placeholders in one group are still allowed — all three of the properties the proposal wanted, and each is asserted in tests[].\n\nOne consequence to note rather than solve here: with the corrected predicate, if a removed member is re-invited (#5 creates a second active row) and then the ten-second Undo fires, clearing removed_at on the old row raises a unique violation. I reproduced that too. That path needs a re-invite, which is #5, so it is unreachable in this piece; undoLeave should still guard against it with a NOT EXISTS on another active membership rather than relying on the constraint error, and #5 inherits that note.",
+    "files": [
+      {
+        "path": "src/db/schema.ts",
+        "action": "edit",
+        "change": "Add the groupType enum ('trip','home','couple','other') and the groups, members and activity tables beside the existing three. groups: id, name, currency varchar(3) notNull, type nullable enum, inviteToken notNull, inviteEnabled notNull default false, archivedAt nullable, createdAt, updatedAt ($onUpdate, matching users). members: id, groupId FK cascade, userId FK users cascade and NULLABLE, isOwner notNull default false, removedAt nullable, createdAt. activity: id, groupId FK cascade, actorId FK users set null, kind notNull, subjectMemberId FK members set null, createdAt. Five index declarations: on members, members_group_idx, members_one_owner_per_group (partial unique on group_id WHERE is_owner), and members_group_user_unique — a partial unique on (group_id, user_id) whose WHERE clause is `user_id IS NOT NULL AND removed_at IS NULL`, NOT `user_id IS NOT NULL`. Removal sets removed_at and never deletes the row, so a predicate without the removed_at clause keeps covering removed members and makes a re-add, and therefore undoLeave, fail on the unique index; verified on this repository's PGlite. Also groups_invite_token_unique and activity_group_created_idx.",
+        "why": "The index predicate is load-bearing and the proposal got it wrong; its own test case contradicted its own schema line."
+      },
+      {
+        "path": "drizzle/0001_create_groups_members_activity.sql",
+        "action": "create",
+        "change": "Generated by `npx drizzle-kit generate`, committed. Exact SQL was produced and read back from a scratch config in this repo: CREATE TYPE \"public\".\"group_type\" AS ENUM('trip','home','couple','other'); the three CREATE TABLEs; the five FKs; CREATE INDEX activity_group_created_idx, CREATE UNIQUE INDEX groups_invite_token_unique, CREATE INDEX members_group_idx, and the two partial unique indexes — the members_group_user_unique one carrying the predicate on both user_id IS NOT NULL AND removed_at IS NULL."
+      },
+      {
+        "path": "drizzle/meta/0001_snapshot.json",
+        "action": "create",
+        "change": "The generated snapshot for the new migration, as drizzle-kit writes it."
+      },
+      {
+        "path": "drizzle/meta/_journal.json",
+        "action": "edit",
+        "change": "Append the idx 1 entry for the new migration."
+      },
+      {
+        "path": "src/lib/access.ts",
+        "action": "create",
+        "change": "The authorisation boundary and the only module that reads or writes group data. requireMember(groupId) joins the caller to members on group_id, user_id and removed_at is null and returns { memberId, isOwner } or null. readGroup is a SELECT with an INNER JOIN to the caller's membership so zero rows means notFound(). readMembers is the two-alias self-join on members. listGroupsForUser returns the caller's active memberships with a LEFT JOIN of max(activity.created_at) for ordering. Also exports canLeave for the leave guard and restoreOwnLeave for undo."
+      },
+      {
+        "path": "src/lib/activity.ts",
+        "action": "create",
+        "change": "The only writer of the feed. `export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0]` and recordActivity(tx, { groupId, actorId, kind, subjectMemberId }) which inserts a crypto.randomUUID()-keyed row and never returns via .returning(). Kinds: group.created, group.renamed, group.archived, member.joined, member.left, member.removed.",
+        "why": "The tx parameter is what makes 'no state change without a feed entry' structural rather than a convention."
+      },
+      {
+        "path": "src/lib/money.ts",
+        "action": "create",
+        "change": "One exported function: formatMinor(minor: bigint, currency: string): string. It reads the formatter's maximumFractionDigits, divides by 10n ** BigInt(digits), builds a decimal string, and passes that to Intl.NumberFormat. No arithmetic on a float anywhere on the path."
+      },
+      {
+        "path": "src/app/actions/groups.ts",
+        "action": "create",
+        "change": "'use server'. createGroup: Zod-validates name, currency (trimmed, uppercased, /^[A-Z]{3}$/, defaulting to the caller's defaultCurrency) and an optional type. One db.transaction inserts the group with a randomUUID id and a crypto.randomBytes(32).toString('base64url') invite token and invite_enabled false, inserts the owner member row, records group.created, then redirects to /groups/<id>. renameGroup and archiveGroup use an UPDATE ... WHERE id = $g AND EXISTS (membership join) with is_owner for owner-only work; rowCount 0 -> notFound(). Both revalidatePath('/', 'layout')."
+      },
+      {
+        "path": "src/app/actions/members.ts",
+        "action": "create",
+        "change": "'use server'. leaveGroup: membership-scoped UPDATE setting removed_at where group_id and user_id match, is_owner is false, removed_at is null, and another active member exists; rowCount 0 gives the transfer-or-archive form error, or notFound() when the caller is not a member at all; member.left is recorded in the same transaction and it redirects to /?left=<groupId>. undoLeave: the activity-guarded UPDATE, guarded also by NOT EXISTS another active membership row for the same (group_id, user_id) so it cannot raise a unique violation if the member was re-invited, then member.joined, then revalidatePath('/'). removeMember: owner-only UPDATE on a non-owner, user-backed, not-yet-removed row with an owner-membership EXISTS, then member.removed.",
+        "why": "The NOT EXISTS guard is the cheap half of #5's later re-invite path; without it the undo write depends on catching a constraint error."
+      },
+      {
+        "path": "src/components/create-group-form.tsx",
+        "action": "create",
+        "change": "'use client'. A form over useActionState(createGroup, ...) with a name field, a currency field seeded from the user's defaultCurrency, and a type select whose first option is 'No type'. Field errors render next to their field through the existing Field/Input primitives; the form error renders above the submit; the submit is a Button with busyLabel while pending."
+      },
+      {
+        "path": "src/components/rename-group-form.tsx",
+        "action": "create",
+        "change": "'use client'. The owner-only rename form over useActionState(renameGroup, ...): a single name field seeded with the current name, a Save button, the same field-error and form-error treatment as the create form."
+      },
+      {
+        "path": "src/components/member-actions.tsx",
+        "action": "create",
+        "change": "'use client'. LeaveButton and RemoveButton, each opening the existing ui/dialog Dialog whose title names the group and whose consequence sentence says what will happen. The confirm button is the Dialog's own destructive variant. Rendered only for the viewer the row permits them on."
+      },
+      {
+        "path": "src/components/group-overview.tsx",
+        "action": "create",
+        "change": "The presentational body of /groups/[id]: the h1 with the group name, type and currency beside it, a balance summary listing every member with their formatted balance and direction, the settled message where the transfer list would be, the recent-activity block (up to five entries, newest first, excluding the group.* lifecycle kinds) or the exact string 'Nothing here yet — add the first expense.' when there is nothing inside the group to show, and the secondary action row linking to Members. Renders 'This group is archived.' when archived."
+      },
+      {
+        "path": "src/components/members-screen.tsx",
+        "action": "create",
+        "change": "The presentational body of the members screen: exactly one h1 (the group name), a back link '<- <group name>', then rows each with display name, formatted balance and role, the owner row marked. Each row shows only the actions available to the viewer: Leave on the viewer's own row when they are not the owner, Remove on other rows when the viewer is the owner. Below the list, an owner-only section holding the rename form and an archive form. When the viewer is the owner the Leave control is replaced by the transfer-or-archive line."
+      },
+      {
+        "path": "src/components/group-list.tsx",
+        "action": "create",
+        "change": "The presentational home list: a Create group action, and one row per group with name, type and the viewer's net balance in it, plus the LeaveNotice row when the caller has just left one. Renders EmptyState when there are no groups."
+      },
+      {
+        "path": "src/components/leave-notice.tsx",
+        "action": "create",
+        "change": "'use client'. The single row reading '<name>' with the text 'You left <name> - Undo', where Undo is a real form submitting undoLeave so the write works without JavaScript. A useEffect timer adds the hidden attribute after ten seconds."
+      },
+      {
+        "path": "src/app/(app)/groups/new/page.tsx",
+        "action": "create",
+        "change": "requireUser() via the route group layout, then the Create group form with the currency seeded from the caller's defaultCurrency."
+      },
+      {
+        "path": "src/app/(app)/groups/[id]/page.tsx",
+        "action": "create",
+        "change": "async page with `const { id } = await params`; calls readGroup(id) and notFound()s on null, then reads the member list and the group's recent activity, then renders GroupOverview. Does not read the group by id anywhere else."
+      },
+      {
+        "path": "src/app/(app)/groups/[id]/loading.tsx",
+        "action": "create",
+        "change": "A static skeleton: a summary block, the settled-message placeholder, and five activity row placeholders."
+      },
+      {
+        "path": "src/app/(app)/groups/[id]/members/page.tsx",
+        "action": "create",
+        "change": "async page; readMembers(id) returns null for a non-member -> notFound(); otherwise renders MembersScreen with the caller's own membership, so the screen knows which controls to show. Owner-only group actions render only when the caller is the owner."
+      },
+      {
+        "path": "src/app/(app)/groups/[id]/members/loading.tsx",
+        "action": "create",
+        "change": "A static skeleton of five member rows."
+      },
+      {
+        "path": "src/app/(app)/not-found.tsx",
+        "action": "create",
+        "change": "A single h1 reading that the group is not available, one sentence of explanation, and a link home."
+      },
+      {
+        "path": "src/app/(app)/page.tsx",
+        "action": "edit",
+        "change": "Replace the unconditional <HomeEmpty /> with: await searchParams, listGroupsForUser, and <GroupList groups={...} leftGroupName={...} />. The ?left= name is read through the same membership join (a membership that is now removed_at is not null), so a group id in the URL that the caller did not leave renders nothing. Update the docblock, which currently says there are no groups in this ticket."
+      },
+      {
+        "path": "src/app/(app)/loading.tsx",
+        "action": "edit",
+        "change": "Drop the two figure placeholders and keep the three group rows, with the comment updated to say the figures are #6's."
+      },
+      {
+        "path": "src/components/home-empty.tsx",
+        "action": "edit",
+        "change": "Docblock only: it now renders when the caller's group list is empty rather than unconditionally, and the query lives in the page."
+      },
+      {
+        "path": "src/components/ui/money.tsx",
+        "action": "edit",
+        "change": "Docblock only: its 'src/lib/money.ts is piece 4's' note is corrected to say the formatter lands here in #4 and #6 adds parsing and splitting. The 'No caller yet: nothing in this ticket stores an amount' note is removed, because group-overview and members-screen both call it."
+      },
+      {
+        "path": "tests/integration/migrations.test.ts",
+        "action": "edit",
+        "change": "Update the asserted table list to ['activity','groups','login_attempts','members','sessions','tabs_migrations','users'] and the asserted index names to include activity_group_created_idx, groups_invite_token_unique, members_group_idx, members_group_user_unique and members_one_owner_per_group; assert the partial unique index predicates are present, and specifically that members_group_user_unique's predicate contains both `user_id IS NOT NULL` and `removed_at IS NULL`, and that the group_type enum is created.",
+        "why": "The index predicate is the defect this work order corrects; asserting the exact predicate is what stops it regressing."
+      },
+      {
+        "path": "tests/integration/groups.test.ts",
+        "action": "create",
+        "change": "Fresh in-memory PGlite via tests/helpers/pglite.ts. Create writes a group, an owner member row and exactly one group.created activity row; the creator is authorised and a second seeded user is not; a plain member calling renameGroup or archiveGroup gets NEXT_NOT_FOUND and the row is unchanged; rename and archive each write one activity row; archive removes the group from listGroupsForUser while leaving it readable by URL; invalid name/currency returns fieldErrors and writes nothing; and with vi.mock('@/lib/activity') making recordActivity throw, createGroup leaves no group row."
+      },
+      {
+        "path": "tests/integration/members.test.ts",
+        "action": "create",
+        "change": "Two seeded users in one group. A plain member can leave and exactly one member.left row is written; the owner is refused with the transfer-or-archive message and nothing is written; the last remaining member is refused; undoLeave restores the row, writes one member.joined, and returns the group to the caller's list; undoLeave on an owner-initiated member.removed returns 0 rows and does not restore; a non-owner calling removeMember gets NEXT_NOT_FOUND and the row is unchanged; the owner cannot be removed; removal sets removed_at without deleting the row and writes one member.removed; the partial unique index allows a re-added (group_id, user_id) after removal, still rejects a duplicate among active rows, and allows two user_id-null placeholders; the one-owner index refuses a second owner."
+      },
+      {
+        "path": "tests/components/group-screens.test.tsx",
+        "action": "create",
+        "change": "Renders GroupOverview and MembersScreen with hand-built props. Exactly one h1 per screen; the overview shows name, type and currency; every member appears in the balance summary with a formatted zero and the settled message; the recent-activity block reads exactly 'Nothing here yet - add the first expense.' when the group has no non-lifecycle activity; MembersScreen marks the owner, and for a plain member shows neither Rename nor Archive nor any Remove control while leaving only Leave on their own row; for the owner it shows Rename and Archive, no Remove, and the transfer-or-archive line in place of Leave; the leave dialog's title names the group and Escape calls onCancel."
+      },
+      {
+        "path": "tests/lib/money.test.ts",
+        "action": "create",
+        "change": "formatMinor across zero, a positive and a negative bigint, a zero-decimal currency (JPY), a three-decimal currency (BHD), and a figure above Number.MAX_SAFE_INTEGER, asserting the exact formatted strings and that no float precision is lost."
+      }
+    ],
+    "tests": [
+      {
+        "path": "tests/integration/groups.test.ts",
+        "action": "create",
+        "cases": [
+          "creating a group writes the group row, an is_owner member row for the creator, and exactly one group.created activity row, all inside one transaction",
+          "the invite token is written and unique, and invite_enabled defaults to false",
+          "readGroup returns the group for a member and null for a second user, and the page notFound()s for that second user",
+          "an unauthenticated call redirects to /sign-in",
+          "a plain member calling renameGroup or archiveGroup gets NEXT_NOT_FOUND and the row is unchanged",
+          "the owner renaming writes one group.renamed row and the new name appears on the overview, the back link and the home row",
+          "archiving removes the group from listGroupsForUser and leaves it readable by direct URL with archived_at set",
+          "a name of 81 characters or a currency of 'EU' returns fieldErrors and writes nothing",
+          "when recordActivity throws mid-transaction the groups table has gained no row"
+        ]
+      },
+      {
+        "path": "tests/integration/members.test.ts",
+        "action": "create",
+        "cases": [
+          "a plain member leaving sets removed_at, writes exactly one member.left row, and drops the group from their home list",
+          "the owner leaving is refused with the transfer-or-archive message and writes nothing",
+          "the last remaining member is refused",
+          "undoLeave restores removed_at, writes one member.joined row and restores the home list row",
+          "undoLeave cannot restore a member.removed performed by the owner: rowCount 0 and the row stays removed",
+          "a non-owner calling removeMember gets NEXT_NOT_FOUND and the row is unchanged",
+          "the owner cannot be removed",
+          "removing sets removed_at without deleting the row and writes exactly one member.removed row",
+          "the partial unique index permits a new membership for a (group_id, user_id) whose previous row is removed, still rejects a second active row for the same pair, and permits two user_id-null placeholders in one group",
+          "the members_one_owner_per_group index refuses a second owner row in the same group"
+        ]
+      },
+      {
+        "path": "tests/components/group-screens.test.tsx",
+        "action": "create",
+        "cases": [
+          "each screen renders exactly one h1",
+          "the overview shows name, type and currency, every member at a formatted zero, and the settled message in place of a transfer list",
+          "the recent-activity block reads exactly 'Nothing here yet - add the first expense.' for a group whose only activity is group.created",
+          "an archived group shows the archived line",
+          "a plain member sees no Rename, no Archive and no Remove control, and sees Leave only on their own row",
+          "the owner sees Rename and Archive, no Remove, and the transfer-or-archive line in place of Leave",
+          "the leave dialog's title names the group and Escape dismisses it without confirming"
+        ]
+      },
+      {
+        "path": "tests/lib/money.test.ts",
+        "action": "create",
+        "cases": [
+          "0n in INR formats to the exact zero string with two fraction digits",
+          "a negative bigint formats with the sign on the currency symbol, not as a bare minus",
+          "a zero-decimal currency formats without a fraction part and a three-decimal currency keeps three digits",
+          "a value above Number.MAX_SAFE_INTEGER formats exactly, with no float rounding anywhere in the path"
+        ]
+      },
+      {
+        "path": "tests/integration/migrations.test.ts",
+        "action": "edit",
+        "cases": [
+          "the applied migration list contains activity, groups and members alongside the existing tables",
+          "every index name asserted by name, including the two partial unique indexes with their WHERE predicates",
+          "members_group_user_unique's predicate contains both user_id IS NOT NULL and removed_at IS NULL, so a removed member is outside the index",
+          "the group_type enum is created with the four values"
+        ]
+      }
+    ],
+    "acceptance": [
+      {
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "test",
+        "check": "Creating a group writes the group row (name, currency defaulting to the caller's default currency, optional type), an owner member row for the creator and nothing else; the creator is authorised to read it from the same request onward.",
+        "how_to_verify": "tests/integration/groups.test.ts asserts the group row, the is_owner member row, exactly one group.created activity row, and that readGroup returns the group for the creator and null for a second seeded user. QA: create 'Lisbon' with EUR and type trip."
+      },
+      {
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser",
+        "check": "The overview shows the group's name, type and currency, a balance summary listing every member at a formatted zero, the settled message where the transfer list would be, and a recent-activity block reading exactly 'Nothing here yet — add the first expense.'",
+        "how_to_verify": "tests/components/group-screens.test.tsx asserts the exact string and the per-member zero rows; QA reads the screen after creating a group."
+      },
+      {
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "browser",
+        "check": "The members screen lists every member with display name, balance and role and marks the owner; Rename, Remove member and Archive are owner-only and are absent for a plain member.",
+        "how_to_verify": "tests/components/group-screens.test.tsx renders MembersScreen as the owner and as a plain member and asserts the presence and absence of each control; QA reads the screen as each."
+      },
+      {
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "test",
+        "check": "Renaming changes the name in the header, on the back link and on the home row; archiving removes the group from the home list for its members; a plain member calling either is refused with a 404 and the row is unchanged.",
+        "how_to_verify": "tests/integration/groups.test.ts asserts the row is unchanged after a plain member's refused rename and archive, and that archived groups leave listGroupsForUser; QA renames and archives as the owner."
+      },
+      {
+        "id": "AC-5",
+        "source": "IAC-5",
+        "verify": "test",
+        "check": "A plain member can leave from the members screen after confirming in a dialog that names the group; the home list then shows a row reading 'You left <group> · Undo' in place rather than a toast, and Undo restores the membership without raising a unique-violation.",
+        "how_to_verify": "tests/integration/members.test.ts asserts the leave, the single member.left row, and that undoLeave restores the row and writes one member.joined. The dialog's title and Escape dismissal are asserted in tests/components/group-screens.test.tsx."
+      },
+      {
+        "id": "AC-6",
+        "source": "IAC-6",
+        "verify": "test",
+        "check": "The owner cannot leave; the screen says they must transfer ownership or archive the group, and the write is refused with nothing written.",
+        "how_to_verify": "tests/components/group-screens.test.tsx asserts the owner sees the line and no Leave control; tests/integration/members.test.ts asserts the owner's leave call is refused and the member row is unchanged."
+      },
+      {
+        "id": "AC-7",
+        "source": "IAC-7",
+        "verify": "test",
+        "check": "Every read and write is authorised by a membership join inside the query: a second signed-in user gets a 404 and no data, an unauthenticated request redirects to /sign-in, and no exported function takes a group id and returns that group's data without the join.",
+        "how_to_verify": "tests/integration/groups.test.ts asserts readGroup returns null and the page throws NEXT_NOT_FOUND for a second user, and that the redirect helper records /sign-in for an unauthenticated call. The structural half is enforced by construction: src/lib/access.ts is the only module that imports the groups and members tables, and AC-7's check greps for that."
+      },
+      {
+        "id": "AC-8",
+        "source": "IAC-8",
+        "verify": "test",
+        "check": "The home list shows only groups the caller has an active membership in, each row with name, type and their net balance in it, ordered by newest activity first.",
+        "how_to_verify": "tests/integration/groups.test.ts asserts a second user's groups do not appear in the first's list and that leaving or archiving removes a row; the ORDER BY (max(activity.created_at) DESC NULLS LAST, groups.created_at DESC) was executed against PGlite in this repo before the plan was written."
+      },
+      {
+        "id": "AC-9",
+        "source": "IAC-9",
+        "verify": "test",
+        "check": "Group created, member left and member removed each write exactly one activity row in the same transaction as the change, and a write that fails after the group row leaves no entry.",
+        "how_to_verify": "tests/integration/groups.test.ts counts exactly one row per mutation and, with vi.mock('@/lib/activity') making recordActivity throw, asserts the groups table gained no row; tests/integration/members.test.ts does the same for leave, undo and remove."
+      },
+      {
+        "id": "AC-10",
+        "source": "IAC-10",
+        "verify": "browser",
+        "check": "Every new screen is keyboard operable with visible focus, the destructive confirmations are reachable and Escape-dismissible, and each screen has a designed empty, loading and error state.",
+        "how_to_verify": "tests/components/group-screens.test.tsx asserts exactly one h1 per screen and that Escape dismisses the leave dialog; the loading skeletons are static files; the error state is the route group's existing src/app/(app)/error.tsx with one 'Try again'. QA tabs through both new screens."
+      }
+    ],
+    "qa_script": [
+      "Sign in as a fresh user. The home page shows the empty state and a Create group action, and no figures.",
+      "Create a group named 'Lisbon', currency EUR, type trip. You land on /groups/<id>. The header reads Lisbon, trip, EUR; the balance summary lists you at EUR 0.00; where a transfer list would be there is a settled message; the recent-activity block reads exactly 'Nothing here yet - add the first expense.'",
+      "Open Members. There is one row: your display name, EUR 0.00, and Owner. Rename and Archive are present below the list. There is no Leave control, and the line about transferring ownership or archiving the group is shown instead.",
+      "With a single owner there is nothing to confirm, so the destructive dialog is verified in the second-user profile below.",
+      "Rename the group to 'Lisbon trip'. The h1, the back link on the members screen and the home list row all read Lisbon trip immediately.",
+      "Archive the group. It disappears from the home list. Paste its URL back into the address bar: the group still opens and shows that it is archived.",
+      "In a second browser profile, sign in as a different user and paste the group's URL. You get the not-found page with a link home, and no group data of any kind.",
+      "In the same second profile, load the home page: the group is not listed.",
+      "Unauthenticated, load /groups/<id> directly: you are redirected to /sign-in.",
+      "Keyboard only: tab through the create form, the overview and the members screen. Every control takes focus with a visible ring, each screen has exactly one h1, and no action needs a pointer."
+    ],
+    "risks": [
+      "IAC-2 and IAC-9 conflict on a brand-new group: one requires the recent-activity block to read 'Nothing here yet - add the first expense.' and the other requires creation to write exactly one entry. The plan resolves it by excluding group.* kinds from the overview's block, which keeps both sentences literally true but means the creation entry is invisible until #10's activity screen exists. If the council reads the block as showing every entry, the alternative is that a new group shows 'You created <name>' and IAC-2's exact string becomes unreachable, which is a change to a binding criterion and so is not a call this plan makes on its own.",
+      "The 'last remaining owner' reading is a genuine ambiguity in the ticket, not a technical unknown. If it is read the other way, a promotion rule is needed and nothing in the ticket asks for one, so the scope of this piece grows.",
+      "Creating src/lib/money.ts here contradicts the comment in src/components/ui/money.tsx that calls it piece 4's, and piece 4 is #6. #6 will extend this file rather than create it, which is a small coordination cost, not a correctness one.",
+      "src/app/(app)/error.tsx supplies a single generic error message for every screen in the route group, so the new screens do not get docs/ui.md's per-screen wording. One designed error state per screen would mean three new error.tsx files; this plan takes the shared one deliberately.",
+      "The money values in this ticket are all zero, so the balance queries are not exercised against non-zero data until #8. The formatting path is unit-tested against non-zero bigints, but the query that produces a balance is not.",
+      "src/lib/access.ts is the authorisation boundary and nothing enforces that no other module reads groups or members. The mitigation is that it is the only module that imports the groups and members tables, and AC-7's check includes a grep for that; a lint rule would be the durable version and belongs in a later ticket, not here.",
+      "The ten-second leave notice relies on a client timer. If the timer fires before the person reads it, Undo is gone; the write still works, but the guarantee is only as good as the timer. A server-rendered expiry would need a timestamp comparison in the page, which is a larger change than the criterion asks for.",
+      "vi.mock('@/lib/activity') is used once, in the atomicity test, to force a mid-transaction failure. If the pipeline's guard treats any vi.mock of a src/ module as a db mock, that one case would need to be rewritten as a direct call to the transaction body, which would test less."
+    ],
+    "out_of_scope": [
+      "IAC-n: none deferred. All ten of the split's IAC-1 through IAC-10 are carried as AC-1 through AC-10 with source set; none is deferred.",
+      "Invite links, joining, placeholder members and claiming a placeholder — issue #5. The group row's invite_token and invite_enabled are written here because the ticket says this piece writes them; the invite block below the member list that docs/ui.md describes is not built here, and neither is the Add placeholder member action.",
+      "The balance precondition on leave and remove — issue #6. Every balance in this piece is zero, so leave and remove are not blocked by a non-zero balance.",
+      "The two home summary figures — issue #6. The home loading skeleton's two figure placeholders are removed rather than shipped for a page that has no figures.",
+      "Transfers and payments — issues #9 and #8. The overview renders the settled message in place of a transfer list and no transfer screen is built.",
+      "Expenses, editing and deleting them — issues #6 and #7. The 'add the first expense' empty state is text here, not a link to a form that does not exist yet.",
+      "The full activity screen at /groups/[id]/activity — issue #10. This piece writes the activity rows and reads five of them for the overview block; it does not build the screen.",
+      "Transferring ownership — no issue covers it, and the leave refusal text points at it as something the person must do elsewhere. Building it here would add a screen and a mutation that no criterion asks for.",
+      "An ADR or spec update for the partial unique indexes. .sdlc/memory/**, docs/** and .github/** are forbidden paths for this plan; the reasoning in this work order and the comment in src/db/schema.ts carry it instead."
+    ],
+    "kind": "feature",
+    "confidence": 78,
+    "confidence_rationale": "The mechanisms are not guesses: I re-ran the two authorisation shapes and the money formatter against this repository's own PGlite and Node, and the Tx type typechecks, so nothing load-bearing in the approach is unverified. What moves this below the 90 band is a mix of a defect the proposer did not catch and a judgement it flagged as open. The index predicate was simply wrong and contradicted the proposer's own test case — corrected here and reproduced both ways, but it is evidence that the proposal's verification pass was thinner than its fifteen VERIFIED tags suggest, and other index-level claims should be read with that in mind. The owner-leave reading rests on an interpretation of ambiguous ticket text, not on a constraint, and the IAC-2/IAC-9 conflict is resolved by a choice that a reviewer may reasonably make the other way. Upward, if implementation turns out to be a direct transcription of this order and both the integration and component suites pass first time; downward, if the owner-leave reading proves to be the narrower one, which would need a promotion rule no criterion asks for.",
+    "reproduced": false,
+    "evidence": [
+      "Partial unique index enforcement on this repository's PGlite: a duplicate (group_id, user_id) insert is rejected, a second owner row is rejected, and two user_id-null placeholders in one group succeed — so the ticket's 'exactly one owner' becomes a database constraint and #5's double-open-invite stays a no-op.",
+      "The index predicate defect, reproduced: with members_group_user_unique as (group_id, user_id) WHERE user_id IS NOT NULL, insert member (g1,u1), set removed_at while retaining the row, then re-insert (g1,u1) yields 'RE-ADD REJECTED: duplicate key value violates unique constraint members_group_user_unique'.",
+      "The same reproduction under the corrected predicate WHERE user_id IS NOT NULL AND removed_at IS NULL: 'OK active duplicate rejected', 'OK re-add after removal allowed', 'OK two placeholders allowed' — all three properties the proposal wanted.",
+      "The consequence of the corrected predicate, reproduced: with a removed row and a re-invited second active row for the same (group_id, user_id), clearing removed_at on the old row raises 'duplicate key value violates unique constraint mu'. Reachable only once #5 can re-invite, which is why undoLeave gets a NOT EXISTS guard rather than relying on the constraint error.",
+      "`export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0]` compiles under `npx tsc --noEmit` in this repository against the PgliteDatabase | NeonDatabase union, so src/lib/activity.ts can require a transaction parameter rather than opening its own.",
+      "The money formatter, run through the exact shape the plan specifies (read maximumFractionDigits, divide by 10n**BigInt(digits), build a decimal string, hand it to Intl.NumberFormat): 0 INR -> ₹0.00, 100000 INR -> ₹1,000.00, -18050 INR -> -₹180.50, 100 JPY -> ¥100, 12345 BHD -> BHD 12.345, and 10^21 INR exact. No float on the path.",
+      "src/db/client.ts's own docblock confirms the insert-overload constraint the plan routes around: '.returning(fields) is an OVERLOADED method, and TypeScript resolves the overloads of a union of the two drivers builders to the zero-argument one', which is why every id is generated with crypto.randomUUID() and passed into .values().",
+      "tests/helpers/request.ts already mocks next/navigation's redirect and notFound and next/cache's revalidatePath, so the integration tests can assert NEXT_NOT_FOUND, a /sign-in redirect and a transaction rollback without new scaffolding.",
+      "tests/helpers/pglite.ts installs a fresh in-memory PGlite on the same globalThis slot src/db/client.ts uses, before any route or action module is imported, which is why the new integration test files need no db mock.",
+      "src/components/ui/dialog.tsx's own docblock names piece 2 as the caller that was missing, confirming this issue is the one that first uses it, and its Escape handler and focus trap are already implemented rather than to be written.",
+      "src/components/ui/money.tsx takes a pre-formatted string and does no arithmetic, so introducing src/lib/money.ts here needs no change to the primitive beyond its docblock — the plan's edit claim is accurate.",
+      "docs/ui.md line 80 gives the leave notice verbatim: 'After leaving a group, the group list shows the row with \"You left Lisbon · Undo\" for ten seconds', which is where the proposal's ten-second timer and its exact copy come from.",
+      "docs/ui.md's members section says each member row carries the actions available to the viewer 'decided by role and balance' — the role half lands here and the balance half is the piece-6 precondition the ticket defers, so the screen's rule is not being narrowed against the design.",
+      "docs/ui.md records that archiving a group does NOT confirm in a dialog, because it is reversible, while leaving and removing do. The plan follows this: only Leave and Remove open the Dialog.",
+      "package.json already has db:generate wired to drizzle-kit and drizzle.config.ts points at ./src/db/schema.ts with out ./drizzle, so the new migration is generated rather than hand-written."
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Keep the proposal's index predicate as written (WHERE user_id IS NOT NULL) and drop the re-add test case.",
+        "rejected_because": "It makes a user who leaves permanently unable to rejoin the same group, and undoLeave raises a unique violation instead of restoring. Reproduced both on this repository's PGlite. The predicate is corrected instead; the test case is kept because it was right and the schema was wrong."
+      },
+      {
+        "approach": "Delete the member row on removal instead of setting removed_at, which would make the original predicate correct.",
+        "rejected_because": "The ticket names this as one of two decisions to make now and not revisit: removal sets removed_at so the shares and payer records that point at it stay. Piece 6's TR-16 depends on it. Also forbidden by the brief as a recorded decision."
+      },
+      {
+        "approach": "Leave the leave-and-undo flow for a later piece, since this ticket's only member is the owner and the owner cannot leave.",
+        "rejected_because": "IAC-5 is binding on this piece and says a member can leave and the home list says 'You left <group> · Undo'. IAC-5 is in acceptance[] with source IAC-5, not deferred."
+      },
+      {
+        "approach": "Let the owner's leave succeed when another member exists, so IAC-6 is satisfied by the narrower reading alone.",
+        "rejected_because": "Nothing transfers ownership in this piece, so an owner who leaves would leave a group with no owner, contradicting the recorded invariant that a group always has exactly one owner. The narrower reading needs a promotion rule no criterion asks for; it is recorded in assumptions and unknowns instead of being adopted silently."
+      },
+      {
+        "approach": "Show the group.created entry in the overview's recent-activity block, so the creation entry is visible immediately.",
+        "rejected_because": "IAC-2 binds the exact string 'Nothing here yet - add the first expense.' for a new group, and a brand-new group does have a creation entry under IAC-9. Excluding the group.* kinds keeps both sentences literally true."
+      },
+      {
+        "approach": "Authorise by an explicit requireMember() check before each query rather than by a join inside the query.",
+        "rejected_because": "TR-1 and the recorded invariant both require the authorisation to be expressed inside the query, so that a missing check yields no rows rather than a bug. A separate check is exactly the thing the criterion says a caller can forget."
+      },
+      {
+        "approach": "Make the invitation token the sole key for group reads.",
+        "rejected_because": "The token is written now and resolved by #5; nothing in this piece reads it. Using it as a read key would put an unguessable-but-shareable credential on the authorisation path."
+      }
+    ],
+    "assumptions": [
+      "VERIFIED by me, not assumed: the membership self-join (two aliases of members joined on me.group_id = target.group_id AND me.user_id = $caller AND me.removed_at is null) returns rows for a member and zero rows for a non-member on PGlite in this repository.",
+      "VERIFIED by me: the activity-guarded undo UPDATE gives rowCount 1 for a genuine self-leave and 0 for an owner-initiated member.removed, so the hijack case is closed by the query rather than by a check.",
+      "VERIFIED by me: `export type Tx = Parameters<Parameters<Database['transaction']>[0]>[0]` typechecks against the PgliteDatabase | NeonDatabase union under `tsc --noEmit`, so src/lib/activity.ts can require a transaction parameter.",
+      "VERIFIED by me: bigint -> decimal string -> Intl.NumberFormat is exact for zero, positive, negative, a zero-decimal currency (JPY), a three-decimal currency (BHD) and 10^21, with no float constructed on the path.",
+      "VERIFIED by me, and the one correction I made: the members partial unique index needs the predicate `user_id IS NOT NULL AND removed_at IS NULL`. With `user_id IS NOT NULL` alone the re-add of a removed member is rejected and undoLeave cannot restore.",
+      "ASSUMED, and the reviewer should attack it first: that the owner is refused a leave in every case, not only when they are the last remaining member. The recorded invariant is that a group always has exactly one owner, nothing in this ticket transfers ownership, and the issue's own refusal text ('they must transfer ownership or archive') describes an owner who wants out rather than a member who is merely last. If the narrower reading was intended, this needs a promotion rule that no criterion asks for.",
+      "ASSUMED: that group.renamed and group.archived each write an activity row. TR-17 says every mutation writes one; TR-19's enumeration does not name them. This follows TR-17 because it is the unconditional invariant, and because #10's screen needs the rows.",
+      "ASSUMED: that an archived group remains reachable by direct URL and shows 'This group is archived.' IAC-4 only requires it to leave the home list, and a link a person already holds becoming a dead end is the worse failure.",
+      "ASSUMED: that the currency field is free text validated to /^[A-Z]{3}$/, matching the private currencySchema in src/app/actions/profile.ts, because the currency list is an open question in the project memory and this form should not decide it.",
+      "ASSUMED: that type 'other' is an explicit choice rather than the absence of a type. The ticket lists trip/home/couple/other with the field optional and the column is nullable, so 'No type' and 'Other' are both offered and both valid.",
+      "ASSUMED: that the leave notice's ten seconds comes from docs/ui.md's own example ('You left Lisbon · Undo' for ten seconds) rather than from a person. If the number is wrong it is one constant.",
+      "ASSUMED: that undoLeave writes a member.joined row, on the grounds that undo is a membership change and TR-17 covers every mutation. Restoring silently would leave a state change with no feed entry."
+    ],
+    "unknowns": [
+      "Whether 'the last remaining owner' in IAC-6 means the owner in all cases or only the last member standing. This is the one criterion whose implementation depends on a reading rather than on a constraint.",
+      "Whether the overview's recent-activity block should show group lifecycle events once expenses exist. Excluding group.* keeps IAC-2's string true for a brand-new group; when #6 lands the block will have real content and it becomes a live question whether a rename belongs in it. #6 should inherit this deliberately rather than rediscover it.",
+      "Whether the home list's 'your net balance in it' column is the same figure as the members screen's per-member balance. Both are zero in this ticket, so the two queries cannot be told apart until #8.",
+      "Whether the archived badge belongs on the members screen as well as the overview. The ticket does not say; this plan puts it only where the header lives.",
+      "The exact wording of the transfer-or-archive line. It is quoted from the ticket ('must transfer ownership or archive'), which may not be the copy the design wants.",
+      "Whether invite_token should ever be shown or regenerated in this piece. It is written here and enabled in #5; nothing reads it here, and #5 may expect a different token format or length."
+    ],
+    "debate_summary": "The critique was empty — plan/critique.json is `{}`, so there were no findings to apply, dismiss, or weigh, and nothing in the council's second round survived to argue with. That is itself the honest headline: this work order is the proposal plus my own reading of the code, not a synthesis of two documents. I did not treat the empty critique as endorsement, so I re-verified the proposal's load-bearing claims directly against this repository rather than citing its fifteen VERIFIED tags.\n\nMost of them held. The Tx type extraction compiles under tsc --noEmit against the PgliteDatabase|NeonDatabase union. The money formatter is exact across zero, positive, negative, JPY, BHD and 10^21 with no float on the path. The partial unique indexes really are enforced by PGlite, and the activity-guarded undo really does distinguish a self-leave from an owner-initiated removal.\n\nOne did not. The proposal declared members_group_user_unique as a partial unique index on (group_id, user_id) WHERE user_id IS NOT NULL, and in the same document listed a test asserting that the index \"permits a new membership for a (group_id, user_id) whose previous row is removed\". Those two claims are incompatible, because this ticket's own decision is that removal sets removed_at and never deletes the row — so a removed member is still inside the index. I reproduced it: insert, set removed_at, re-insert gives \"RE-ADD REJECTED: duplicate key value violates unique constraint\". The predicate must be `user_id IS NOT NULL AND removed_at IS NULL`; under that, all three properties the proposal wanted survive — active duplicate rejected, re-add after removal allowed, two user_id-null placeholders allowed — and I verified each. Left uncorrected this would have shipped a group a person can never rejoin, and an Undo button that throws instead of restoring. The proposal's own test would have caught it, which is worth noting: the test was right and the schema line was wrong.\n\nThe correction cascades to two places the proposal did not anticipate. undoLeave now needs a NOT EXISTS guard so a later re-invite cannot make it raise a unique violation — I reproduced that case too, though it needs #5 to reach. And tests/integration/migrations.test.ts should assert the predicate's exact text, since the wrong predicate typechecks and passes everything short of the re-add case.\n\nWhat I did not change is the proposal's judgement calls, and there is real disagreement left standing. Its resolution of the IAC-2/IAC-9 conflict — excluding group.* kinds from the overview's activity block so a new group shows 'Nothing here yet — add the first expense.' while still writing the creation entry for #10 — is a reading, not a derivation. It keeps both binding sentences literally true, and I think it is right, but a council could reasonably decide IAC-2's block means every entry and that the creation row should be visible. That is a change to a binding criterion and not a call this stage should make silently. I have carried it forward as a stated risk rather than burying it.\n\nThe owner-leave rule is the other one. The plan refuses a leave for the owner in all cases, reading the recorded exactly-one-owner invariant plus the ticket's \"transfer ownership or archive\" text as describing an owner who wants out. IAC-6 only says \"the last remaining owner\". If the narrower reading was meant, this piece needs a promotion rule that no criterion asks for, and the scope grows. I left it as the assumption the reviewer should attack first, flagged in unknowns, and did not let it inflate or depress the confidence score on its own.\n\nTwo smaller places where I sided with the proposal against my initial instinct: creating src/lib/money.ts here despite money.tsx calling it piece 4's (#6 will extend rather than recreate it — coordination cost, not correctness), and the shared error.tsx rather than three per-screen ones. Both are deliberate and recorded as risks.\n\nConfidence is 78, not the proposal's 82. Every mechanism is now verified and the one defect is fixed, which argues for higher — but I found a real contradiction between the schema and the proposal's own test after reading it once, and I am not going to treat a document that thorough as uniformly checked because it says so fifteen times. That is the honest reason for the gap.",
+    "residual_risks": [
+      "The leave and undo flow cannot be reached by QA in this piece: it needs a second member, and adding one is invite links (issue #5). QA can verify that the owner sees no Leave control and the transfer-or-archive line, and that a Remove dialog names the group and Escape-dismisses it. The actual leave, the home-list notice and Undo are covered by tests/integration/members.test.ts and a component test, not by a browser. This is a real gap in browser coverage for IAC-5 and it follows from the piece split, not from this plan.",
+      "Balance figures render as zero everywhere in this piece by construction, so nothing here can demonstrate that a non-zero figure is formatted, coloured and direction-labelled correctly on screen. That first happens in #8.",
+      "Invite tokens are generated here and never displayed or used here. If #5 expects a particular token format or length, this piece's crypto.randomBytes(32).toString('base64url') is what it has to work with.",
+      "The undo-re-invite collision (clearing removed_at when a second active row already exists for the same group and user) is guarded by NOT EXISTS in undoLeave and is unreachable without #5. If #5 changes how membership rows are created, that guard needs re-checking there rather than being assumed to still hold."
+    ],
+    "mode": "proposal"
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T12:47:36.542Z",
+  "validated_ac_changes": []
 }
