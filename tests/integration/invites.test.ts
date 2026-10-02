@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
@@ -225,6 +225,43 @@ describe('joining through a link', () => {
     expect(await activeMembers(groupId)).toHaveLength(2);
     expect(await entriesOfKind(groupId, 'member.joined')).toHaveLength(1);
     expect(await rowsFor(groupId, alex.id)).toHaveLength(1);
+  }, 60_000);
+
+  it('takes the partial index as its conflict target, so a duplicate active insert is a no-op', async () => {
+    const { groupId, token } = await groupWithOwner();
+    const alex = await seedUser('alex@example.invalid', 'Alex');
+    await join(alex.cookies, token);
+
+    // The clause joinGroupIfAbsent now carries, run on its own so the ON CONFLICT predicate
+    // decides the outcome rather than the WHERE NOT EXISTS fast path above it — which cannot be
+    // reached with an active row already there. A predicate that does not match the index does
+    // not return empty here; it raises, because there is no constraint to infer.
+    const duplicate = await db.execute<{ id: string }>(sql`
+      insert into ${members} (id, group_id, user_id)
+      select ${randomUUID()}::uuid, ${groupId}::uuid, ${alex.id}::uuid
+      on conflict (group_id, user_id) where user_id is not null and removed_at is null do nothing
+      returning id
+    `);
+    expect(duplicate.rows).toHaveLength(0);
+    expect(await activeMembers(groupId)).toHaveLength(2);
+
+    // And the predicate is load-bearing rather than decoration: without it the partial index is
+    // not inferable, so the same insert raises. A test that passed either way would not be
+    // proving the target matches members_group_user_active_idx. Drizzle wraps what the driver
+    // raised, so the sentence to read is the cause's.
+    const mismatch = await db
+      .execute(sql`
+        insert into ${members} (id, group_id, user_id)
+        select ${randomUUID()}::uuid, ${groupId}::uuid, ${alex.id}::uuid
+        on conflict (group_id, user_id) do nothing
+        returning id
+      `)
+      .then(() => null)
+      .catch((error: unknown) => error);
+
+    expect((mismatch as Error & { cause?: Error } | null)?.cause?.message).toMatch(
+      /no unique or exclusion constraint/i,
+    );
   }, 60_000);
 
   it('refuses a stale confirm after the link was rotated, without throwing', async () => {
