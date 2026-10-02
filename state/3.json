@@ -254,9 +254,8 @@
     "version": 4
   },
   "touch_paths": [
-    "src/app/layout.tsx",
-    "src/app/globals.css",
     "src/components/ui/top-bar.tsx",
+    "src/components/shell.tsx",
     "tests/components/ui.test.tsx",
     "tests/components/ui.test.tsx"
   ],
