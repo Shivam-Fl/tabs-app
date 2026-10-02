@@ -112,5 +112,22 @@
   "dispatched_stage": "plan",
   "validated_from": "plan",
   "validated_at": "2026-10-02T17:06:33.963Z",
-  "validated_ac_changes": []
+  "validated_ac_changes": [],
+  "failure_packet": {
+    "issue": 5,
+    "head": null,
+    "stage": "plan",
+    "attempt": 2,
+    "occurrences": 1,
+    "error_type": "agent-runtime",
+    "error_signature": "9fba12e3a4368526",
+    "raw_excerpt": "--- job: plan ---\n\n✅ Installation complete!\n\nClaude Code installed successfully\nSetting up Claude settings at: /home/runner/.claude/settings.json\nCreating .claude directory...\nNo existing settings file found, creating new one\nProcessing settings input...\nParsed settings input as JSON\nMerged settings with input settings\nUpdated settings with enableAllProjectMcpServers: true\nSettings saved successfully\nNo marketplaces specified, skipping marketplace setup\nNo plugins specified, skipping plugins installation\nRunning Claude Code via SDK (full output hidden for security)...\nRerun in debug mode or enable `show_full_output: true` in your workflow file for full output.\nRunning Claude with prompt from file: /home/runner/work/_temp/claude-prompts/claude-prompt.txt\nSDK options: {\n  \"model\": \"muse-spark-1.3-contributor\",\n  \"allowedTools\": [\n    \"Bash\",\n    \"Read\",\n    \"Grep\",\n    \"Glob\",\n    \"Write\"\n  ],\n  \"systemPrompt\": {\n    \"type\": \"preset\",\n    \"preset\": \"claude_code\"\n  },\n  \"pathToClaudeCodeExecutable\": \"/home/runner/.local/bin/claude\",\n  \"settingSources\": [\n    \"user\",\n    \"project\",\n    \"local\"\n  ]\n}\n{\n  \"type\": \"system\",\n  \"subtype\": \"init\",\n  \"message\": \"Claude Code initialized\",\n  \"model\": \"muse-spark-1.3-contributor\"\n}\n{\n  \"type\": \"result\",\n  \"subtype\": \"success\",\n  \"is_error\": false,\n  \"duration_ms\": 200038,\n  \"num_turns\": 40,\n  \"total_cost_usd\": 1.4635475000000002,\n  \"permission_denials_count\": 0,\n  \"modelUsage\": {\n    \"muse-spark-1.3-contributor\": {\n      \"contextWindow\": 200000,\n      \"maxOutputTokens\": 32000\n    }\n  }\n}\nLog saved to /home/runner/work/_temp/claude-execution-output.json\nSet session_id: 29146803-62cb-4396-a32c-d039530d8a0c\n##[error]--json-schema was provided but Claude did not return structured_output. Result subtype: success\n##[error]Action failed with error: --json-schema was provided but Claude did not return structured_output. Result subtype: success\n##[error]Process completed with exit code 1.\n##[end-action id=propose_agent.run;outcome=failure;conclusion=failure;duration_ms=211124]\n##[start-action display=Re-prepend system bin dirs to PATH;id=propose_agent.__run_6]\n##[end-action id=propose_agent.__run_6;outcome=skipped;conclusion=skipped;duration_ms=0]\n##[start-action display=Cleanup SSH signing key;id=propose_agent.__run_7]\n##[end-action id=propose_agent.__run_7;outcome=skipped;conclusion=skipped;duration_ms=0]\n##[start-action display=Post buffered inline comments;id=propose_agent.__run_8]\n##[group]Run BUN_BIN=\"${GITHUB_ACTION_PATH}/bin/bun\"\nBUN_BIN=\"${GITHUB_ACTION_PATH}/bin/bun\"\n[ -x \"$BUN_BIN\" ] || BUN_BIN=\"bun\"\n# No --tsconfig-override: see the \"Run Claude Code Action\" step above.\n\"$BUN_BIN\" --no-env-file \\\n  --config=\"${GITHUB_ACTION_PATH}/bunfig.toml\" \\\n  run ${GITHUB_ACTION_PATH}/src/entrypoints/post-buffered-inline-comments.ts\nshell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}\n\nstep \"Council 1/3 — propose\" failed in job \"plan\" (conclusion: failure)",
+    "digest": "The plan stage failed and no known error pattern matched. The raw output is below.",
+    "decision": "escalate",
+    "decision_reason": "the agent runtime failed before it produced anything — no diff to fix and no diagnosis to revise. Usually a rate or quota limit on the token, not the code",
+    "context": {
+      "run_url": "https://github.com/Shivam-Fl/tabs-app/actions/runs/37039059649",
+      "prior_signatures": []
+    }
+  }
 }
