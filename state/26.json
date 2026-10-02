@@ -17,8 +17,10 @@
   "work_order": null,
   "touch_paths": [],
   "acceptance": [],
-  "planned_route": [],
-  "on_complete": null,
+  "planned_route": [
+    "plan"
+  ],
+  "on_complete": "comment-only",
   "artifacts": {},
   "failure_history": [],
   "review_history": [],
@@ -30,6 +32,22 @@
       "at": "2026-10-02T19:54:39.480Z",
       "agent": "intake",
       "action": "-> planning"
+    },
+    {
+      "at": "2026-10-02T20:06:12.369Z",
+      "agent": "router",
+      "action": "route plan (model, confidence 82)"
     }
-  ]
+  ],
+  "resume_at": null,
+  "flow_plan": {
+    "kind": "chore",
+    "confidence": 82,
+    "matched_rule": null,
+    "gates": {},
+    "councils": {
+      "plan": "single"
+    },
+    "decided_at": "2026-10-02T20:06:12.369Z"
+  }
 }
