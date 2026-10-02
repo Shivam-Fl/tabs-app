@@ -1,9 +1,13 @@
 import { sql } from 'drizzle-orm';
 import {
+  bigint,
   boolean,
+  date,
   index,
+  jsonb,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -126,6 +130,138 @@ export const members = pgTable(
   ],
 );
 
+/** How an expense's total is divided. The entered rule, kept beside the amounts it produced. */
+export const expenseSplitTypes = ['equal', 'exact', 'percentage', 'shares'] as const;
+
+export type ExpenseSplitType = (typeof expenseSplitTypes)[number];
+
+export const expenseSplitType = pgEnum('expense_split_type', expenseSplitTypes);
+
+/** What an expense was for. Optional on the row: a category is a filter, never a requirement. */
+export const expenseCategories = [
+  'food',
+  'travel',
+  'rent',
+  'utilities',
+  'shopping',
+  'entertainment',
+  'other',
+] as const;
+
+export type ExpenseCategory = (typeof expenseCategories)[number];
+
+export const expenseCategory = pgEnum('expense_category', expenseCategories);
+
+/**
+ * Something that was paid for. The amounts the entered rule produced live in expense_payer,
+ * expense_share and expense_split_input, and only the first two are ever read to compute a
+ * balance (TR-4): the rule rows exist so an edit can reopen the form exactly as it was saved.
+ */
+export const expenses = pgTable(
+  'expenses',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => groups.id, { onDelete: 'cascade' }),
+    description: text('description').notNull(),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    // The group's currency, copied onto the row rather than joined: it is what this amount was
+    // recorded in, and a group whose currency ever changed must not restate its history.
+    currency: varchar('currency', { length: 3 }).notNull(),
+    splitType: expenseSplitType('split_type').notNull(),
+    category: expenseCategory('category'),
+    note: text('note'),
+    // A CALENDAR date, not a timestamp: a timestamptz would shift by the server's zone and
+    // reorder the newest-first list for anyone whose day starts earlier than the server's.
+    date: date('date').notNull(),
+    createdBy: uuid('created_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+    // Piece 5 deletes by setting this; every read here filters on it so the column is already
+    // load-bearing rather than a flag somebody has to remember to add a filter for.
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (table) => [
+    // The list's own order, newest first by the date it happened on.
+    index('expenses_group_date_idx').on(table.groupId, table.date.desc()),
+    // TR-18's search half arrives in piece 8; the index is generated here because it belongs
+    // to the table's shape rather than to the screen that first reads it.
+    index('expenses_description_idx').on(table.description),
+  ],
+);
+
+/** One member's part of an expense's total. The parts sum exactly to the expense (TR-5). */
+export const expensePayer = pgTable(
+  'expense_payer',
+  {
+    expenseId: uuid('expense_id')
+      .notNull()
+      .references(() => expenses.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+  },
+  // Composite primary key, exactly as the TRD's key list specifies: a member appears once per
+  // expense as a payer, and a second row is a duplicate rather than a second contribution.
+  (table) => [primaryKey({ columns: [table.expenseId, table.memberId] })],
+);
+
+/**
+ * One member's resulting share of an expense, computed once when it is written. Together with
+ * expense_payer this is the whole ledger: a balance is a sum over these rows and never a
+ * re-evaluation of the stored rule (TR-4).
+ */
+export const expenseShare = pgTable(
+  'expense_share',
+  {
+    expenseId: uuid('expense_id')
+      .notNull()
+      .references(() => expenses.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+  },
+  (table) => [primaryKey({ columns: [table.expenseId, table.memberId] })],
+);
+
+/**
+ * One member's place in the split, with the number that member was given. The row's existence
+ * is the record that this member was included — a member removed from the split has their row
+ * deleted rather than zeroed.
+ *
+ * The unit is fixed by the expense's split_type: minor units for `exact`, hundredths of a
+ * percent for `percentage`, a plain count for `shares`, and null for `equal`, where the only
+ * stored input is membership. Never read to compute a balance.
+ */
+export const expenseSplitInput = pgTable(
+  'expense_split_input',
+  {
+    expenseId: uuid('expense_id')
+      .notNull()
+      .references(() => expenses.id, { onDelete: 'cascade' }),
+    memberId: uuid('member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    inputValue: bigint('input_value', { mode: 'bigint' }),
+  },
+  (table) => [primaryKey({ columns: [table.expenseId, table.memberId] })],
+);
+
+/**
+ * What an activity entry is about, for the entries that name a subject rather than a membership.
+ * A union rather than a free string so a new subject has to be named here — and so the row a
+ * reader cannot interpret is a compile error rather than a null.
+ */
+export const activitySubjectTypes = ['expense'] as const;
+
+export type ActivitySubjectType = (typeof activitySubjectTypes)[number];
+
 /**
  * The feed's kinds. Every mutation writes exactly one entry, in the same transaction as the
  * change (TR-17). The `group.*` kinds are lifecycle, not spending, which is why the overview's
@@ -143,6 +279,7 @@ export const activityKinds = [
   'member.removed',
   'member.placeholder_added',
   'member.claimed',
+  'expense.added',
 ] as const;
 
 export type ActivityKind = (typeof activityKinds)[number];
@@ -161,6 +298,20 @@ export const activity = pgTable(
     // own member?" a single indexed read.
     memberId: uuid('member_id').references(() => members.id, { onDelete: 'cascade' }),
     kind: text('kind').$type<ActivityKind>().notNull(),
+    /**
+     * What the entry is about, for the kinds that name a subject rather than a membership: an
+     * expense today, a payment in piece 7. Both are null for the membership and lifecycle
+     * kinds, which name a member_id instead.
+     */
+    subjectType: text('subject_type').$type<ActivitySubjectType>(),
+    subjectId: uuid('subject_id'),
+    /**
+     * What changed, for the kinds that carry it. jsonb rather than columns because the shape is
+     * per-kind: an expense.added records the expense as it was entered, and an expense.edited
+     * (piece 5) records each field that moved. Money is stored here as a STRING of minor units,
+     * because jsonb numbers are floats and 0.1 is exactly the value this product must not have.
+     */
+    detail: jsonb('detail').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [

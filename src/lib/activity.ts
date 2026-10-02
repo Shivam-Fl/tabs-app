@@ -1,5 +1,5 @@
 import type { Database } from '@/db/client';
-import { activity, type ActivityKind } from '@/db/schema';
+import { activity, type ActivityKind, type ActivitySubjectType } from '@/db/schema';
 
 /**
  * The feed's only writer.
@@ -20,6 +20,17 @@ export interface ActivityEntry {
   kind: ActivityKind;
   /** The membership row the entry is about, for the member.* kinds. */
   memberId?: string | null;
+  /**
+   * The row the entry is about, for the kinds that name one instead of a membership. An
+   * expense.added names its expense, which is what lets piece 8's feed link to it.
+   */
+  subjectType?: ActivitySubjectType | null;
+  subjectId?: string | null;
+  /**
+   * What changed, as it was entered. Money inside this must be a STRING of minor units —
+   * jsonb numbers are floats, which is the one thing a money value may never become.
+   */
+  detail?: Record<string, unknown> | null;
 }
 
 /**
@@ -32,5 +43,8 @@ export async function recordActivity(tx: Tx, entry: ActivityEntry): Promise<void
     actorId: entry.actorId,
     memberId: entry.memberId ?? null,
     kind: entry.kind,
+    subjectType: entry.subjectType ?? null,
+    subjectId: entry.subjectId ?? null,
+    detail: entry.detail ?? null,
   });
 }

@@ -2,7 +2,20 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from 'drizzle-orm';
 
 import type { Database } from '@/db/client';
-import { activity, groups, members, users, type ActivityKind, type GroupType } from '@/db/schema';
+import {
+  activity,
+  expensePayer,
+  expenseShare,
+  expenseSplitInput,
+  expenses,
+  groups,
+  members,
+  users,
+  type ActivityKind,
+  type ExpenseCategory,
+  type ExpenseSplitType,
+  type GroupType,
+} from '@/db/schema';
 import type { Tx } from '@/lib/activity';
 
 /**
@@ -109,6 +122,47 @@ export interface ActivityRow {
   createdAt: Date;
 }
 
+/** One member's part of an expense, as the list renders it: who, and how much of the total. */
+export interface ExpensePayerRow {
+  memberId: string;
+  displayName: string;
+  amountMinor: bigint;
+}
+
+/** A row of the expenses list, with the payers already resolved to names. */
+export interface ExpenseRow {
+  id: string;
+  description: string;
+  amountMinor: bigint;
+  currency: string;
+  splitType: ExpenseSplitType;
+  category: ExpenseCategory | null;
+  note: string | null;
+  /** The calendar date it happened on, as `YYYY-MM-DD` — never shifted through a Date. */
+  date: string;
+  createdAt: Date;
+  /** Every member who paid part of it, in the canonical member order. */
+  payers: ExpensePayerRow[];
+}
+
+/** The rows one expense is written as. The shares here are the split() the caller already ran. */
+export interface NewExpense {
+  groupId: string;
+  description: string;
+  amountMinor: bigint;
+  currency: string;
+  splitType: ExpenseSplitType;
+  category: ExpenseCategory | null;
+  note: string | null;
+  date: string;
+  /** The member whose request this is; also who the row records as having created it. */
+  createdBy: string;
+  payers: { memberId: string; amountMinor: bigint }[];
+  shares: { memberId: string; amountMinor: bigint }[];
+  /** The entered rule, one row per included member. Null value for an equal split. */
+  inputs: { memberId: string; value: bigint | null }[];
+}
+
 // --- write scope predicates ---------------------------------------------------------
 
 /**
@@ -208,7 +262,10 @@ export async function readMembers(session: Session, groupId: string, userId: str
     .from(members)
     .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.groupId, groupId), isNull(members.removedAt)))
-    .orderBy(desc(members.isOwner), asc(members.createdAt));
+    // The CANONICAL member order, which the expense form's participant picker renders and the
+    // split's remainder rule names (TR-3): owner first, then by when the membership was
+    // created, then by id so two rows written in the same transaction still have an order.
+    .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
 
   return rows.map((row) => ({
     memberId: row.memberId,
@@ -220,6 +277,71 @@ export async function readMembers(session: Session, groupId: string, userId: str
     isPlaceholder: row.userId === null,
     balanceMinor: 0n,
   }));
+}
+
+/**
+ * The group's expenses, newest first by the date each happened on and with created_at then id
+ * breaking a tie, for a caller who is an active member. Null for everybody else, so a
+ * non-member reads nothing rather than an empty list (TR-1).
+ *
+ * The payers are a second statement rather than a join, because an expense with two payers
+ * would otherwise arrive as two rows of the same expense and the list would have to be folded
+ * back together — and the fold is where a row gets dropped. Both statements carry the
+ * membership predicate, so neither is reachable by a non-member.
+ */
+export async function readExpensesForGroup(
+  session: Session,
+  groupId: string,
+  userId: string,
+): Promise<ExpenseRow[] | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const rows = await session
+    .select({
+      id: expenses.id,
+      description: expenses.description,
+      amountMinor: expenses.amountMinor,
+      currency: expenses.currency,
+      splitType: expenses.splitType,
+      category: expenses.category,
+      note: expenses.note,
+      date: expenses.date,
+      createdAt: expenses.createdAt,
+    })
+    .from(expenses)
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .orderBy(desc(expenses.date), desc(expenses.createdAt), desc(expenses.id));
+
+  if (rows.length === 0) return [];
+
+  const payerRows = await session
+    .select({
+      expenseId: expensePayer.expenseId,
+      memberId: expensePayer.memberId,
+      profileName: users.displayName,
+      storedName: members.displayName,
+      amountMinor: expensePayer.amountMinor,
+    })
+    .from(expensePayer)
+    .innerJoin(expenses, eq(expenses.id, expensePayer.expenseId))
+    .innerJoin(members, eq(members.id, expensePayer.memberId))
+    .leftJoin(users, eq(users.id, members.userId))
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
+
+  const payersByExpense = new Map<string, ExpensePayerRow[]>();
+  for (const row of payerRows) {
+    const payers = payersByExpense.get(row.expenseId) ?? [];
+    payers.push({
+      memberId: row.memberId,
+      displayName: row.profileName ?? row.storedName ?? 'Member',
+      amountMinor: row.amountMinor,
+    });
+    payersByExpense.set(row.expenseId, payers);
+  }
+
+  return rows.map((row) => ({ ...row, payers: payersByExpense.get(row.id) ?? [] }));
 }
 
 /**
@@ -402,6 +524,77 @@ export async function createGroupWithOwner(
   await tx.insert(members).values({ id: memberId, groupId, userId: input.ownerId, isOwner: true });
 
   return groupId;
+}
+
+/**
+ * Writes one expense and its rows: the rule the person entered (split_type and one
+ * expense_split_input per included member), the amounts that rule produced (expense_share),
+ * and who actually paid (expense_payer). Returns the new expense's id, or null when the caller
+ * is not an active member of the group, in which case nothing was written.
+ *
+ * The membership predicate travels INSIDE the insert — `insert ... select ... where exists (a
+ * membership)` — rather than being a read the caller does first, for the reason the rest of this
+ * module gives: a check that can be separated from the write is a check that gets forgotten.
+ * The child rows reference the expense id, which exists only if that insert matched.
+ *
+ * Before it returns — and so before the caller's transaction can commit — the rows actually in
+ * the database are summed and asserted against the total (TR-3). Asserting the arrays in
+ * memory would only restate what the caller already believed; this reads back what was written.
+ */
+export async function createExpenseWithRows(tx: Tx, input: NewExpense): Promise<string | null> {
+  const expenseId = randomUUID();
+
+  const inserted = await tx.execute<{ id: string }>(sql`
+    insert into ${expenses}
+      (id, group_id, description, amount_minor, currency, split_type, category, note, date, created_by)
+    select
+      ${expenseId}::uuid,
+      ${input.groupId}::uuid,
+      ${input.description},
+      ${input.amountMinor.toString()}::bigint,
+      ${input.currency},
+      ${input.splitType}::expense_split_type,
+      ${input.category}::expense_category,
+      ${input.note},
+      ${input.date}::date,
+      ${input.createdBy}::uuid
+    where ${memberOfGroup(input.groupId, input.createdBy)}
+    returning id
+  `);
+
+  if (!inserted.rows[0]) return null;
+
+  if (input.payers.length > 0) {
+    await tx.insert(expensePayer).values(input.payers.map((payer) => ({ expenseId, ...payer })));
+  }
+  if (input.shares.length > 0) {
+    await tx.insert(expenseShare).values(input.shares.map((share) => ({ expenseId, ...share })));
+  }
+  if (input.inputs.length > 0) {
+    await tx.insert(expenseSplitInput).values(
+      input.inputs.map((rule) => ({ expenseId, memberId: rule.memberId, inputValue: rule.value })),
+    );
+  }
+
+  const totals = await tx.execute<{ paid: string; shared: string }>(sql`
+    select
+      (select coalesce(sum(${expensePayer.amountMinor}), 0)::text from ${expensePayer}
+        where ${expensePayer.expenseId} = ${expenseId}::uuid) as paid,
+      (select coalesce(sum(${expenseShare.amountMinor}), 0)::text from ${expenseShare}
+        where ${expenseShare.expenseId} = ${expenseId}::uuid) as shared
+  `);
+
+  const paid = BigInt(totals.rows[0]?.paid ?? '0');
+  const shared = BigInt(totals.rows[0]?.shared ?? '0');
+  if (paid !== input.amountMinor || shared !== input.amountMinor) {
+    // A programming error, not a user error: this throws so the transaction rolls back rather
+    // than committing an expense whose parts do not add up to its total.
+    throw new Error(
+      `tabs: expense ${expenseId} was written with payers totalling ${paid} and shares totalling ${shared}, against a total of ${input.amountMinor}`,
+    );
+  }
+
+  return expenseId;
 }
 
 /** Renames a group the caller owns. False when they do not own it, with nothing written. */
