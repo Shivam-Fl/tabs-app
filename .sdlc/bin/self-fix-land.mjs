@@ -28,6 +28,7 @@ import { expectedChecks } from './lib/checks.js';
 import { rerunTarget } from './lib/flow-graph.js';
 import { dispatchStage } from './lib/route-io.js';
 import { checkFix, classOf, readFix } from './lib/self-fix.js';
+import { reportUpstream, reportLine } from './lib/report-upstream.js';
 import { readLedger, updateLedger } from './lib/state-io.js';
 
 const exec = promisify(execFile);
@@ -48,13 +49,27 @@ const id = `${issue}-${failedRun}`;
 // always there to carry it, and this record is what the digest and the once-per-defect rule read.
 const { ledger: fixes } = await readLedger(repo, 'self-fix').catch(() => ({ ledger: null }));
 const entry = fixes?.fixes?.find((f) => f.id === id) ?? {};
-const defect = { file: entry.file, what: entry.what, fix: entry.fix };
+const defect = { file: entry.file, what: entry.what, fix: entry.fix, signature: entry.signature };
 const diagnosis = entry.diagnosis ?? '';
 
 const run = (cmd, args, opts = {}) => exec(cmd, args, { maxBuffer: 64 * 1024 * 1024, ...opts }).then((r) => r.stdout.trim());
 const say = (body) => gh(['issue', 'comment', String(issue), '--body', body])
   .catch((e) => process.stdout.write(`::warning::could not post: ${e.message}\n`));
-const record = (fields) => updateLedger(repo, 'self-fix', (s) => {
+// Every way this ends is reported where the framework lives (lib/report-upstream.js): fixed here or
+// not, the framework's maintainer hears of the defect, once per defect.
+const OUTCOME = {
+  landed: (f) => `It was fixed there and proven — a regression test that fails without the fix — and merged${f.local?.pr ? ` as ${f.local.pr}` : ''}.` +
+    (f.upstream?.url ? ` The fix is raised on the framework: ${f.upstream.url}` : ' The proven patch waits on that project\'s self-fix run.'),
+  raised: (f) => `A fix was proven there but did not merge — ${f.why}` + (f.upstream?.url ? ` The fix is raised on the framework: ${f.upstream.url}` : ''),
+  refused: (f) => `Its self-fix did not land — ${f.why}`,
+};
+const record = async (fields) => {
+  await recordOnly(fields);
+  if (!OUTCOME[fields.status]) return;
+  const r = await reportUpstream({ cfg, stage, project: repo, defect, outcome: OUTCOME[fields.status](fields) });
+  await say(reportLine(r));
+};
+const recordOnly = (fields) => updateLedger(repo, 'self-fix', (s) => {
   const fixes = [...(s?.fixes ?? [])];
   const i = fixes.findIndex((f) => f.id === id);
   const entry = { ...(i >= 0 ? fixes[i] : { id, issue, stage, failed_run: failedRun, file: defect.file ?? null, what: defect.what ?? null }),

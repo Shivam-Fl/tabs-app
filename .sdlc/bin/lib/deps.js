@@ -260,3 +260,24 @@ export function readyButNotStarted(issues = [], ledgered = null) {
     .filter((i) => readyToStart(dependenciesOf(i.body), states).ready)
     .map((i) => i.number);
 }
+
+/**
+ * May a newly arrived issue take a slot? `others` are the repository's other open issues (with
+ * labels), `recent` the admissions made in the last few minutes.
+ *
+ * The cap was enforced only where a waiting issue is offered a slot, so issues a person filed
+ * together all went straight in: eight bugs filed in a minute became eight councils on one token
+ * (actual-sdlc #1-#8). And labels alone race when issues arrive together — each intake counts
+ * before the others have labelled — so an admission is also recorded, and counted until the labels
+ * catch up. Returns the admissions to keep (with this one, when admitted).
+ */
+export const ADMISSION_WINDOW_MS = 15 * 60_000;
+export function admit({ issue, others = [], ledgered = null, recent = [], cap, now = Date.now() }) {
+  const fresh = recent.filter((a) => a.issue !== issue && now - Date.parse(a.at) < ADMISSION_WINDOW_MS);
+  const busy = new Set([
+    ...others.filter((i) => i.number !== issue && inFlight([i], ledgered) === 1).map((i) => i.number),
+    ...fresh.map((a) => a.issue),
+  ]);
+  const admitted = !(cap > 0) || busy.size < cap;
+  return { admitted, busy: busy.size, recent: admitted ? [...fresh, { issue, at: new Date(now).toISOString() }] : fresh };
+}

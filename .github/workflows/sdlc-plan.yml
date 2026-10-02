@@ -142,7 +142,7 @@ jobs:
     # is three 45-minute passes in this one job. Under a job cap below that, a slow council was
     # cancelled mid-pass, a cancelled job answers nothing, and the issue sat at planning with
     # nothing running. Three caps plus setup is where GitHub's cancel stops being possible.
-    timeout-minutes: 160
+    timeout-minutes: 275
     # Read-only: the agents read the issue and the code, and run what they like. Nothing here
     # can push, dispatch, label or comment.
     #
@@ -273,7 +273,7 @@ jobs:
         # never runs. A step that fails on its own is answerable; a job that gets cancelled
         # dispatches nobody and leaves the issue looking exactly like one still being worked
         # on. So the job cap is generous, and this sits under it.
-        timeout-minutes: 45
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -367,7 +367,7 @@ jobs:
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)". Three of these run in this
         # job, and the job's cap sits above all three.
-        timeout-minutes: 45
+        timeout-minutes: 90
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -419,7 +419,7 @@ jobs:
       - name: Council 2/3 — critique
         if: needs.prepare.outputs.mode == 'council' && steps.proposed.outputs.ok == 'true'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
-        timeout-minutes: 45
+        timeout-minutes: 60
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -452,7 +452,7 @@ jobs:
         id: plan_arbiter
         if: needs.prepare.outputs.mode == 'council'
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
-        timeout-minutes: 45
+        timeout-minutes: 90
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -683,7 +683,7 @@ jobs:
       && needs.gate.outputs.gate == 'agent' && needs.gate.outputs.stopped != 'true'
     runs-on: ubuntu-latest
     # Above its one agent cap and setup, for the same reason as the plan job's.
-    timeout-minutes: 70
+    timeout-minutes: 255
     # Read-only, and no id-token, for the same reasons as the plan job.
     permissions:
       contents: read
@@ -716,7 +716,7 @@ jobs:
 
       - name: Plan review agent
         # A HANG DETECTOR, not a budget — see "Plan (single agent)".
-        timeout-minutes: 45
+        timeout-minutes: 225
         uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}

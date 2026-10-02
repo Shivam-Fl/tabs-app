@@ -188,7 +188,7 @@ limits:
   attempts: 10
   runtime_retries: 4       # provider-outage cooldowns one stage may wait through before it
                            # stops for a person. The waits back off 20/40/80/120 minutes.
-  max_in_flight: 3         # how many issues may be mid-pipeline at once. Every agent stage
+  max_in_flight: 4         # how many issues may be mid-pipeline at once. Every agent stage
 
                            # runs on ONE token, and ten concurrent sessions exhausted it in a
 
@@ -196,7 +196,7 @@ limits:
 
                            # 0 = no cap, which is what a fan-out of eight will do to you.
 
-  lock_ttl_minutes: 300    # must exceed the longest job, or the watchdog reclaims a lock
+  lock_ttl_minutes: 600    # must exceed the longest job, or the watchdog reclaims a lock
                          # from a stage that is still running and two agents write at once
   repeat_failure_escalate: 2   # the same failure twice puts the PLAN on trial, not the code
 

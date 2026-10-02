@@ -469,6 +469,8 @@ gates:
 self_fix:
   enabled: true
   per_day: 3               # self-fix runs started in any 24 hours
+  report_upstream: true    # report each framework defect on the framework's repo (SDLC_UPSTREAM_TOKEN files it; without, a prefilled link)
+  name_project: false      # name this repository in those reports
 
 limits:
   attempts: 10
@@ -482,7 +484,7 @@ limits:
 
                            # 0 = no cap, which is what a fan-out of eight will do to you.
 
-  lock_ttl_minutes: 300    # must exceed the longest job, or the watchdog reclaims a lock
+  lock_ttl_minutes: 600    # must exceed the longest job, or the watchdog reclaims a lock
                          # from a stage that is still running and two agents write at once
   repeat_failure_escalate: 2   # the same failure twice puts the PLAN on trial, not the code
 
