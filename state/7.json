@@ -238,7 +238,22 @@
     ],
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/db/schema.ts",
+    "src/lib/access.ts",
+    "src/app/actions/expenses.ts",
+    "src/lib/money.ts",
+    "src/components/expense-form.tsx",
+    "src/app/(app)/groups/[id]/expenses/[expenseId]/edit/page.tsx",
+    "src/app/(app)/groups/[id]/expenses/[expenseId]/edit/loading.tsx",
+    "src/components/delete-expense-button.tsx",
+    "src/components/expense-list.tsx",
+    "src/app/(app)/groups/[id]/expenses/page.tsx",
+    "src/components/group-overview.tsx",
+    "tests/integration/expenses-edit.test.ts",
+    "tests/components/expense-form.test.tsx",
+    "tests/components/expense-list.test.tsx"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
