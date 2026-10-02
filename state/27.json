@@ -68,5 +68,101 @@
     "decided_at": "2026-10-02T20:23:13.055Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "debug"
+  "dispatched_stage": "debug",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "On the new-expense form, typing an amount above the int8 range (e.g. 123456789012345678901234567890.12) and saving keeps the form on screen with the sentence 'That amount is too large to record.' beside the amount field, and no expense is stored.",
+        "how_to_verify": "Seed the app, sign in, open a group's new-expense page, enter the huge amount with one payer covering it, save, and read the amount field error.",
+        "id": "AC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "On the new-expense form, a payer part above the int8 range (total within range, one payer part above it) is refused with a field error on the payers block naming that payer, and nothing is stored.",
+        "how_to_verify": "Same page: total 10.00, two payers where one payer amount is the huge figure; save and read the payers error.",
+        "id": "AC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "On the new-expense form with an exact split, an exact amount above the int8 range for one member is refused with the too-large sentence beside that member's amount field, and nothing is stored.",
+        "how_to_verify": "Same page, split type Exact amounts, total within range, one member input set to the huge figure; save and read that member's input error.",
+        "id": "AC-3",
+        "verify": "browser"
+      },
+      {
+        "check": "An amount of exactly 9223372036854775807 minor units is still accepted and stored exactly (the bound is above-max, not at-max).",
+        "how_to_verify": "Integration case 'accepts an amount of exactly the int8 maximum' in tests/integration/expenses.test.ts run by CI.",
+        "id": "AC-4",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Catch the Postgres out-of-range exception around the transaction and map it to a form error",
+        "rejected_because": "Converts a preventable 500 into a typed error after the fact, depends on driver error-message text, and leaves the payer/exact-input paths to be mapped separately anyway; validating before the write follows the action's existing fieldErrors pattern."
+      },
+      {
+        "approach": "Clamp oversized amounts to the int8 maximum and store them",
+        "rejected_because": "Silently stores a different amount from the one the person typed, violating the invariant that stored rows match what was shown and agreed."
+      }
+    ],
+    "approach": "In src/app/actions/expenses.ts, define MAX_INT8 = 9223372036854775807n beside the existing MAX_DESCRIPTION/MAX_NOTE constants and enforce it at the three places money enters int8 columns: (1) the expense total, alongside the existing <= 0n check, refusing with fieldErrors.amount = 'That amount is too large to record.'; (2) each payer part, alongside the existing <= 0n check, refusing with fieldErrors.payers naming the payer; (3) each exact-split member input, right after parseMemberInput succeeds for split type 'exact', refusing with fieldErrors[`input.${memberId}`]. All three refusals return before createExpenseWithRows runs, so no insert ever carries an out-of-range bigint and the uncaught 500 path becomes unreachable for user input. Shares derived by split() from an in-range total are each <= the total and need no check; percentage and share-count weights are not money and are out of scope per the finding.",
+    "assumptions": [
+      "PGlite enforces the int8 range the same way Postgres does, so the existing integration harness (fresh in-memory PGlite per file) reproduces the overflow without a real Postgres."
+    ],
+    "confidence": 85,
+    "confidence_rationale": "The defect is a missing upper-bound check on three adjacent lines in one file, the fix follows the file's own fieldErrors pattern, and the boundary constant is the Postgres int8 maximum named in the finding.",
+    "evidence": [
+      "src/app/actions/expenses.ts:171-173 bounds the total only below (<= 0n) with no upper bound",
+      "src/app/actions/expenses.ts:225-236 parses each payer part with no upper bound before inserting into expense_payer.amountMinor (int8)",
+      "src/app/actions/expenses.ts:247-255 parses exact-split inputs with no upper bound before inserting into expense_split_input.input_value (int8)",
+      "tests/lib/money.test.ts:155-159 proves parseMajorUnits accepts '123456789012345678901234567890.12' into minor ~1.23e31, far above int8 max 9223372036854775807",
+      "src/db/schema.ts:168,207,228,250 amount_minor/input_value are bigint (int8) columns"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add const MAX_INT8 = 9223372036854775807n with a comment naming it as the Postgres bigint (int8) column maximum; refuse amount.minor above it with fieldErrors.amount = 'That amount is too large to record.' alongside the <= 0n check; refuse any payer part above it with fieldErrors.payers naming the payer alongside the <= 0n check; refuse any exact-split member input above it with fieldErrors[`input.${memberId}`] = 'That amount is too large to record.'; all before the split resolution and the createExpenseWithRows write.",
+        "path": "src/app/actions/expenses.ts",
+        "why": "The single write path for expenses; the only place user-typed money reaches the int8 columns."
+      }
+    ],
+    "issue": 27,
+    "kind": "bug",
+    "out_of_scope": [
+      "Huge share-count or percentage weights overflowing expense_split_input.input_value: weights are counts/hundredths, not money, and the finding scopes the bound to the total, payer parts and exact inputs.",
+      "Client-side live-summary handling of huge figures: the form's summary already renders any parsed bigint via formatMinor; server refusal is the contract this ticket adds."
+    ],
+    "qa_script": [
+      "Seed the app and sign in as a seed user.",
+      "Open a group and start a new expense.",
+      "Set amount to 123456789012345678901234567890.12 with one payer covering it; save and expect the too-large sentence beside the amount field and no new expense in the list.",
+      "Set amount to 10.00 with two payers, one payer amount huge; save and expect the payers-block error naming that payer.",
+      "Switch split to Exact amounts with total 10.00 and one member input huge; save and expect the too-large sentence beside that member's field."
+    ],
+    "reproduced": true,
+    "risks": [
+      "Copy risk only: the exact refusal sentences must match what tests assert; keep the three strings exactly as written in files[].",
+      "No migration, no schema change, no new dependency, no reserved-path touch."
+    ],
+    "root_cause": "parseMajorUnits accepts arbitrary-precision input (proven by the money unit test parsing ~1.23e31 minor units) while the amount_minor / input_value columns are int8 (max 9223372036854775807); createExpense bounds money only below (<= 0n) and has no upper-bound check on the total, payer parts, or exact-split inputs, so an oversized value reaches the insert and Postgres raises out-of-range, surfacing as an uncaught 500 instead of a typed field error.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "refuses an amount above the int8 maximum beside the amount field and writes nothing (amount, payers, shares, inputs, activity all zero)",
+          "refuses a payer part above the int8 maximum beside the payers block and writes nothing",
+          "refuses an exact-split member input above the int8 maximum beside that member's input field and writes nothing",
+          "accepts an amount of exactly the int8 maximum (boundary: above-max refused, at-max stored)"
+        ],
+        "path": "tests/integration/expenses.test.ts"
+      }
+    ],
+    "understanding": "Issue #27 carries one review finding from PR #25 (for #6): an expense amount above the Postgres bigint range parses cleanly through parseMajorUnits and then fails the insert with an uncaught overflow (500) instead of a typed field error beside the amount field. The same missing upper bound applies to each payer part and each exact-split input, which land in the same int8 columns. I verified each claim against the current code: expenses.ts bounds the total only below (<= 0n), payer parts only below, and exact inputs not at all, and the money unit test proves the parser accepts ~1.23e31 minor units.",
+    "unknowns": [],
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T20:25:56.199Z",
+  "validated_ac_changes": []
 }
