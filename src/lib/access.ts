@@ -26,8 +26,18 @@ export const LEAVE_NOTICE_MS = 10_000;
 /** The kinds that describe a membership changing, which is what undo is authorised against. */
 const MEMBERSHIP_KINDS = ['member.joined', 'member.left', 'member.removed'] as const;
 
-/** The group's own lifecycle. Excluded from the overview's recent-activity block. */
-const GROUP_LIFECYCLE_KINDS = ['group.created', 'group.renamed', 'group.archived'] as const;
+/**
+ * The group's own lifecycle. Excluded from the overview's recent-activity block: a new group's
+ * only entries are its creation and, once somebody copies the link, the link's own rotation —
+ * neither of which is something that happened in the group.
+ */
+const GROUP_LIFECYCLE_KINDS = [
+  'group.created',
+  'group.renamed',
+  'group.archived',
+  'group.invite_rotated',
+  'group.invite_disabled',
+] as const;
 
 export interface Membership {
   memberId: string;
@@ -49,12 +59,38 @@ export interface MemberRow {
   displayName: string;
   isOwner: boolean;
   /**
+   * No account behind this row: somebody was added by name before they signed up, and a member
+   * who has joined can claim it. True exactly while members.user_id is null.
+   */
+  isPlaceholder: boolean;
+  /**
    * Always zero in this piece: there are no expense or payment rows to sum, so a balance reads
    * from a literal rather than from a computation over nothing. Piece 6 replaces the literal
    * with the figure and this signature does not change.
    */
   balanceMinor: bigint;
 }
+
+/** A group's invite link, for a caller who is a member of it. Both fields are the group's own. */
+export interface InviteRow {
+  token: string;
+  enabled: boolean;
+}
+
+/**
+ * A group an invite token resolves to: the id to send the joiner to and the name to show them.
+ * Deliberately nothing else — a bearer token buys the group's name and the right to join it,
+ * not its currency, its members or its feed.
+ */
+export interface JoinableGroup {
+  id: string;
+  name: string;
+}
+
+/** Why a claim was refused. Each maps to one sentence on the members screen. */
+export type ClaimRefusal = 'not-a-member' | 'owner' | 'already-claimed' | 'no-longer-available';
+
+export type ClaimResult = { ok: true; memberId: string } | { ok: false; reason: ClaimRefusal };
 
 export interface GroupSummary {
   id: string;
@@ -169,7 +205,13 @@ export async function readGroup(session: Session, groupId: string, userId: strin
  */
 export async function readMembers(session: Session, groupId: string, userId: string): Promise<MemberRow[] | null> {
   const rows = await session
-    .select({ memberId: members.id, displayName: users.displayName, isOwner: members.isOwner })
+    .select({
+      memberId: members.id,
+      profileName: users.displayName,
+      storedName: members.displayName,
+      userId: members.userId,
+      isOwner: members.isOwner,
+    })
     .from(members)
     .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.groupId, groupId), isNull(members.removedAt), memberOfGroup(groupId, userId)))
@@ -179,11 +221,57 @@ export async function readMembers(session: Session, groupId: string, userId: str
 
   return rows.map((row) => ({
     memberId: row.memberId,
-    // A placeholder has no account to take a name from yet; piece 5 gives it one.
-    displayName: row.displayName ?? 'Member',
+    // The live profile first, then the name a placeholder was created with. A claimed
+    // placeholder therefore shows the claimer's own name, and the stored one is only ever
+    // reached while there is no account behind the row.
+    displayName: row.profileName ?? row.storedName ?? 'Member',
     isOwner: row.isOwner,
+    isPlaceholder: row.userId === null,
     balanceMinor: 0n,
   }));
+}
+
+/**
+ * The group's invite token and whether it is live, for a caller who is an active member.
+ * Null for everybody else.
+ *
+ * Member-scoped rather than owner-scoped, because the criterion is that a plain member sees the
+ * link and only the owner sees the controls — and member-scoped rather than folded into
+ * GroupRow, because the token is a secret that only the members screen has any business
+ * rendering, and a field on GroupRow would travel to every screen that reads a group.
+ */
+export async function readInviteForMember(
+  session: Session,
+  groupId: string,
+  userId: string,
+): Promise<InviteRow | null> {
+  const rows = await session
+    .select({ token: groups.inviteToken, enabled: groups.inviteEnabled })
+    .from(groups)
+    .innerJoin(members, and(eq(members.groupId, groups.id), eq(members.userId, userId), isNull(members.removedAt)))
+    .where(eq(groups.id, groupId))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/**
+ * The group an invite token names, or null.
+ *
+ * This is the one read in the product that answers without a session, because the token IS the
+ * credential: it resolves only while the link is enabled and the group is not archived, and it
+ * carries no join — there is no membership to join against yet. A token that is rotated,
+ * disabled, archived or simply wrong resolves to nothing, and the caller is answered with the
+ * same 404 as any other unknown URL.
+ */
+export async function resolveGroupByToken(session: Session, token: string): Promise<JoinableGroup | null> {
+  const rows = await session
+    .select({ id: groups.id, name: groups.name })
+    .from(groups)
+    .where(and(eq(groups.inviteToken, token), eq(groups.inviteEnabled, true), isNull(groups.archivedAt)))
+    .limit(1);
+
+  return rows[0] ?? null;
 }
 
 /**
@@ -424,6 +512,174 @@ export async function removeMemberAsOwner(
         ownedByCaller(groupId, caller.userId),
       ),
     )
+    .returning();
+
+  return updated.length > 0;
+}
+
+/**
+ * Joins the caller to a group if they are not already in it. Returns the new membership's id,
+ * or null when they were already a member and nothing was written.
+ *
+ * The two inserts here and in addPlaceholderAsOwner are written as `insert ... select ... where
+ * not exists` rather than as a read followed by an insert. The predicate travels INSIDE the
+ * statement, so there is no window between deciding and writing in which a second confirm of
+ * the same link could slip through and create the second active row the partial unique index
+ * forbids. It is the same rule the rest of this module keeps — the authorisation is part of the
+ * query — applied to the one shape a Drizzle `where` cannot express, which is why these two are
+ * the only statements in src/ built from raw SQL. What decides the result is the length of the
+ * rows the `returning` clause hands back.
+ */
+export async function joinGroupIfAbsent(tx: Tx, groupId: string, userId: string): Promise<string | null> {
+  const memberId = randomUUID();
+  const inserted = await tx.execute<{ id: string }>(sql`
+    insert into ${members} (id, group_id, user_id)
+    select ${memberId}::uuid, ${groupId}::uuid, ${userId}::uuid
+    where not exists (
+      select 1 from ${members}
+      where group_id = ${groupId}::uuid and user_id = ${userId}::uuid and removed_at is null
+    )
+    returning id
+  `);
+
+  return inserted.rows[0]?.id ?? null;
+}
+
+/**
+ * Adds a member by name, before they have an account. Owner-only, and the owner check is the
+ * `exists` in the select rather than a read the caller then trusts.
+ *
+ * Returns the new membership's id, or null when the caller does not own the group.
+ */
+export async function addPlaceholderAsOwner(
+  tx: Tx,
+  groupId: string,
+  name: string,
+  userId: string,
+): Promise<string | null> {
+  const memberId = randomUUID();
+  const inserted = await tx.execute<{ id: string }>(sql`
+    insert into ${members} (id, group_id, user_id, display_name)
+    select ${memberId}::uuid, ${groupId}::uuid, null, ${name}
+    where exists (
+      select 1 from ${members}
+      where group_id = ${groupId}::uuid and user_id = ${userId}::uuid and is_owner and removed_at is null
+    )
+    returning id
+  `);
+
+  return inserted.rows[0]?.id ?? null;
+}
+
+/** The one row a claim reads: who is behind it, and whether it is still standing. */
+async function readMemberStanding(
+  session: Session,
+  groupId: string,
+  memberId: string,
+): Promise<{ userId: string | null; removedAt: Date | null } | null> {
+  const rows = await session
+    .select({ userId: members.userId, removedAt: members.removedAt })
+    .from(members)
+    .where(and(eq(members.id, memberId), eq(members.groupId, groupId)))
+    .limit(1);
+
+  return rows[0] ?? null;
+}
+
+/** Attaches a user to a placeholder row, and only while it is still unclaimed and active. */
+export async function attachPlaceholderToUser(
+  tx: Tx,
+  groupId: string,
+  memberId: string,
+  userId: string,
+): Promise<boolean> {
+  const updated = await tx
+    .update(members)
+    .set({ userId })
+    .where(
+      and(
+        eq(members.id, memberId),
+        eq(members.groupId, groupId),
+        isNull(members.userId),
+        isNull(members.removedAt),
+      ),
+    )
+    .returning();
+
+  return updated.length > 0;
+}
+
+/**
+ * Claims a placeholder by merging the caller into it: their own membership row is ended and
+ * their user_id attaches to the placeholder row, so every share and payer record already
+ * pointing at that row becomes theirs without a single one of them being rewritten (TR-15).
+ *
+ * The order is the whole of the correctness. Ending the caller's own row FIRST is what frees
+ * the (group, user) slot the active-membership index would otherwise collide with when the
+ * placeholder row becomes active again with their user_id on it. The guarded UPDATE is then the
+ * arbiter: whichever claim reaches it first attaches, and the loser matches zero rows. The
+ * loser's own row is restored in the same transaction, so a refused claim leaves the caller
+ * exactly as they were rather than a member with no membership.
+ */
+export async function mergeClaimPlaceholder(
+  tx: Tx,
+  input: { groupId: string; placeholderMemberId: string; caller: Membership },
+): Promise<ClaimResult> {
+  const { groupId, placeholderMemberId, caller } = input;
+
+  // Before anything is written: claiming ends the caller's own row, and an owner's row is the
+  // one the partial unique index holds the ownership slot with. Nothing in this piece can
+  // promote a new owner, so an owner's claim would leave a group nobody owns.
+  if (caller.isOwner) return { ok: false, reason: 'owner' };
+
+  if (!(await endMembership(tx, caller.memberId, caller.userId))) {
+    return { ok: false, reason: 'not-a-member' };
+  }
+
+  if (await attachPlaceholderToUser(tx, groupId, placeholderMemberId, caller.userId)) {
+    return { ok: true, memberId: placeholderMemberId };
+  }
+
+  // The UPDATE matched nothing, so the placeholder was claimed by somebody else, been removed,
+  // or was never a placeholder. The caller goes back as they were, and the read below only
+  // decides which sentence they are told — it cannot change what the UPDATE decided.
+  await restoreMembership(tx, groupId, caller.memberId, caller.userId);
+
+  const standing = await readMemberStanding(tx, groupId, placeholderMemberId);
+  return {
+    ok: false,
+    reason: !standing || standing.removedAt !== null ? 'no-longer-available' : 'already-claimed',
+  };
+}
+
+/**
+ * Makes a new invite link, owner-only, and re-enables it.
+ *
+ * A new link the owner cannot use would be no link at all, so rotating after disabling turns
+ * the link back on: the old token is dead either way, which is the point of rotating.
+ */
+export async function rotateInviteAsOwner(tx: Tx, groupId: string, userId: string): Promise<string | null> {
+  const token = newInviteToken();
+  const updated = await tx
+    .update(groups)
+    .set({ inviteToken: token, inviteEnabled: true })
+    .where(and(eq(groups.id, groupId), ownedByCaller(groupId, userId)))
+    .returning();
+
+  return updated.length > 0 ? token : null;
+}
+
+/** Turns the invite link off (or back on), owner-only. False when the caller does not own it. */
+export async function setInviteEnabledAsOwner(
+  tx: Tx,
+  groupId: string,
+  enabled: boolean,
+  userId: string,
+): Promise<boolean> {
+  const updated = await tx
+    .update(groups)
+    .set({ inviteEnabled: enabled })
+    .where(and(eq(groups.id, groupId), ownedByCaller(groupId, userId)))
     .returning();
 
   return updated.length > 0;

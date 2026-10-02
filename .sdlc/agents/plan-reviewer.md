@@ -59,7 +59,9 @@ planner to write down something the implementer is required to do anyway.
 - The **approach cannot work** — it calls a function that does not exist, or contradicts how
   the code actually behaves.
 - An **acceptance criterion nobody can verify**: a `browser` one QA cannot observe at a live
-  URL, or a `verify: "test"` one naming no test case CI runs. An untestable criterion is one
+  URL — including one whose page, control or data this change does not bring and nothing
+  merged has (ask for `verify: "test"` naming the CI case) — or a `verify: "test"` one naming
+  no test case CI runs. An untestable criterion is one
   nobody will ever check. A non-visual requirement written as a `test` criterion is correct —
   do not block it for not being browser-observable. This is the one "missing detail"
   that really does block, because it is the only one no later stage can supply.
