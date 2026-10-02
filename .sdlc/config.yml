@@ -25,39 +25,42 @@ runtime:
     # Models this gateway serves only on the OpenAI API (e.g. glm-5.3-flash, kimi-k2.7-code on
     # OpenCode Go). Claude Code speaks only Anthropic Messages, so a job running one starts a local
     # LiteLLM translator; "sdlc doctor --live --bridge <m> --agent" proves a model works through it.
-    openai_models: {}
+    # Served on the OpenAI API only, so a job running one starts the local translator.
+    openai_models:
+      muse-spark-1.3-contributor: responses   # /v1/responses only
+      glm-5.3-flash: chat
   # Model per STEP. Empty = the action's default — a CLAUDE model, so with a provider above
   # every step must name a model that provider serves (claude-args refuses otherwise, and so
   # does doctor). A council member inherits its stage only when its key is absent.
   # Spend where a mistake is hardest to recover from: the diagnosis every later stage
   # inherits, and the last read before code is trusted.
   model:
-    plan:               space-bunny-free
-    plan_proposer:      space-bunny-free
-    plan_critic:        space-bunny-free
-    plan_arbiter:       space-bunny-free
-    plan_reviewer:      space-bunny-free
-    debug:              space-bunny-free
-    implement:          space-bunny-free
-    self_fix:           space-bunny-free   # fixes the pipeline's own plumbing; empty inherits implement
-    review:             space-bunny-free
-    review_correctness: space-bunny-free
-    review_design:      space-bunny-free
-    qa:                 space-bunny-free
-    root_cause:         space-bunny-free
+    plan:               muse-spark-1.3-contributor
+    plan_proposer:      muse-spark-1.3-contributor
+    plan_critic:        deepseek-v4.1-flash
+    plan_arbiter:       muse-spark-1.3-contributor
+    plan_reviewer:      muse-spark-1.3-contributor
+    debug:              muse-spark-1.3-contributor
+    implement:          deepseek-v4.1-flash
+    self_fix:           deepseek-v4.1-flash   # fixes the pipeline's own plumbing; empty inherits implement
+    review:             muse-spark-1.3-contributor
+    review_correctness: muse-spark-1.3-contributor
+    review_design:      muse-spark-1.3-contributor
+    qa:                 muse-spark-1.3-contributor
+    root_cause:         muse-spark-1.3-contributor
     # Reads a whole failed run's log and decides what the failure MEANS — the one step whose
     # wrong answer spends another agent's entire run.
-    triage:             space-bunny-free
-    librarian:          space-bunny-free
-    release:            space-bunny-free
-    maintainer:         space-bunny-free
+    triage:             deepseek-v4.1-flash
+    librarian:          glm-5.3-flash
+    release:            glm-5.3-flash
+    maintainer:         muse-spark-1.3-contributor
     # Decides the stack once, for the life of the repo. The one place to spend the most
     # capable model you have.
-    project:            space-bunny-free
+    project:            muse-spark-1.3-contributor
     # Decides WHICH STAGES a ticket needs, and only when the free rules decline. It runs on
     # every issue they miss, so this is the one step where model cost is a tax on the whole
     # backlog. Never Opus: classifying a ticket is not the hard part of this pipeline.
-    router:             space-bunny-free
+    router:             glm-5.3-flash
 
   # Turn limits. EMPTY MEANS NO LIMIT, which is the default and usually right: the action
   # validates the count after the run, so exceeding a cap discards completed work instead of
