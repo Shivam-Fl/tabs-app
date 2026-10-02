@@ -196,7 +196,16 @@
   ],
   "on_complete": "merge",
   "artifacts": {},
-  "failure_history": [],
+  "failure_history": [
+    {
+      "stage": "ci",
+      "error_signature": "97e2923b52f17238",
+      "error_type": "unknown",
+      "attempt": 2,
+      "at": "2026-10-02T19:20:52.832Z",
+      "digest": "the ci stage failed and no log could be retrieved"
+    }
+  ],
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-02T16:08:01.477Z",
