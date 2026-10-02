@@ -21,9 +21,14 @@ describe('the committed migration list', () => {
   it('applies to an empty in-process PGlite, creating every table and index the schema declares', async () => {
     const db = await useTestDatabase();
 
-    // 0000 stands up accounts and sign-in; 0001 adds the groups, the memberships and the feed.
+    // 0000 stands up accounts and sign-in; 0001 adds the groups, the memberships and the feed;
+    // 0003 adds the expenses, their payer/share/rule rows, and the feed's subject/detail.
     expect(await tableNames(db)).toEqual([
       'activity',
+      'expense_payer',
+      'expense_share',
+      'expense_split_input',
+      'expenses',
       'groups',
       'login_attempts',
       'members',
@@ -49,6 +54,59 @@ describe('the committed migration list', () => {
     expect(names).toContain('members_user_id_idx');
     expect(names).toContain('activity_group_created_idx');
     expect(names).toContain('activity_member_created_idx');
+
+    // Migration 0003. The date index is what makes the list's newest-first read an index scan
+    // rather than a sort of every expense in the group (TR-18), and the description index is
+    // what the search of piece 8 will use.
+    expect(names).toContain('expenses_group_date_idx');
+    expect(names).toContain('expenses_description_idx');
+  });
+
+  it('creates the expense enums with exactly the values the schema and the form offer', async () => {
+    const db = await useTestDatabase();
+
+    const types = await db.execute<{ typname: string }>(
+      sql`SELECT typname FROM pg_type WHERE typtype = 'e' ORDER BY typname`,
+    );
+    expect(types.rows.map((row) => row.typname)).toContain('expense_split_type');
+    expect(types.rows.map((row) => row.typname)).toContain('expense_category');
+
+    // The labels are the contract the form's local option lists and the action's validation are
+    // both written against, so a migration that dropped one would make a checked radio
+    // unrepresentable in the database rather than merely unlisted.
+    const labels = await db.execute<{ enumlabel: string }>(
+      sql`SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'expense_split_type' ORDER BY e.enumsortorder`,
+    );
+    expect(labels.rows.map((row) => row.enumlabel)).toEqual(['equal', 'exact', 'percentage', 'shares']);
+
+    const categories = await db.execute<{ enumlabel: string }>(
+      sql`SELECT enumlabel FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'expense_category' ORDER BY e.enumsortorder`,
+    );
+    expect(categories.rows.map((row) => row.enumlabel)).toEqual([
+      'food',
+      'travel',
+      'rent',
+      'utilities',
+      'shopping',
+      'entertainment',
+      'other',
+    ]);
+  });
+
+  it('adds subject_type, subject_id and detail to the feed the expense activity entry writes into', async () => {
+    const db = await useTestDatabase();
+
+    const columns = await db.execute<{ column_name: string; data_type: string }>(
+      sql`SELECT column_name, data_type FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'activity'`,
+    );
+    const byName = new Map(columns.rows.map((row) => [row.column_name, row.data_type]));
+
+    expect(byName.get('subject_type')).toBe('text');
+    expect(byName.get('subject_id')).toBe('uuid');
+    expect(byName.get('detail')).toBe('jsonb');
   });
 
   it('predicates the active-membership index on removed_at, exactly', async () => {
@@ -153,6 +211,24 @@ describe('the migration files themselves', () => {
     expect(groups?.sql).toContain('CREATE TABLE "members"');
     expect(groups?.sql).toContain('CREATE TABLE "activity"');
     expect(groups?.sql).toContain('CREATE TYPE "public"."group_type"');
+
+    // 0003 is generator output too, and for a reason of its own: a hand-edited file that lost
+    // its statement-breakpoint markers would apply on PGlite — which takes a multi-statement
+    // string — and fail on Neon, which does not.
+    const expenses = migrations.find((migration) => migration.tag.includes('expenses'));
+    expect(expenses, 'no committed migration creates the expense tables').toBeTruthy();
+    expect(expenses?.sql).toContain('CREATE TABLE "expenses"');
+    expect(expenses?.sql).toContain('CREATE TABLE "expense_payer"');
+    expect(expenses?.sql).toContain('CREATE TABLE "expense_share"');
+    expect(expenses?.sql).toContain('CREATE TABLE "expense_split_input"');
+    expect(expenses?.sql).toContain('CREATE TYPE "public"."expense_split_type"');
+    expect(expenses?.sql).toContain('CREATE TYPE "public"."expense_category"');
+    expect(expenses?.sql).toContain('ADD COLUMN "subject_type"');
+    expect(expenses?.sql).toContain('ADD COLUMN "subject_id"');
+    expect(expenses?.sql).toContain('ADD COLUMN "detail"');
+    // Every statement is breakpoint-terminated but the last, so a file with no markers at all
+    // — the hand-written kind — fails here rather than on the production backend.
+    expect(statementsOf(expenses?.sql ?? '').length).toBeGreaterThan(10);
   });
 });
 
