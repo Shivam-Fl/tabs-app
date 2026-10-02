@@ -18,10 +18,19 @@ async function tableNames(db: Awaited<ReturnType<typeof useTestDatabase>>): Prom
 }
 
 describe('the committed migration list', () => {
-  it('applies to an empty in-process PGlite, creating the three tables and their indexes', async () => {
+  it('applies to an empty in-process PGlite, creating every table and index the schema declares', async () => {
     const db = await useTestDatabase();
 
-    expect(await tableNames(db)).toEqual(['login_attempts', 'sessions', 'tabs_migrations', 'users']);
+    // 0000 stands up accounts and sign-in; 0001 adds the groups, the memberships and the feed.
+    expect(await tableNames(db)).toEqual([
+      'activity',
+      'groups',
+      'login_attempts',
+      'members',
+      'sessions',
+      'tabs_migrations',
+      'users',
+    ]);
 
     const indexes = await db.execute<{ indexname: string }>(
       sql`SELECT indexname FROM pg_indexes WHERE schemaname = 'public'`,
@@ -31,6 +40,36 @@ describe('the committed migration list', () => {
     expect(names).toContain('sessions_user_id_idx');
     expect(names).toContain('login_attempts_key_created_idx');
     expect(names).toContain('login_attempts_source_created_idx');
+
+    // Migration 0001. The two partial unique indexes are the group's two invariants — one
+    // active membership per person, one owner per group — and they are only indexes if they
+    // are here.
+    expect(names).toContain('members_group_user_active_idx');
+    expect(names).toContain('members_group_owner_idx');
+    expect(names).toContain('members_user_id_idx');
+    expect(names).toContain('activity_group_created_idx');
+    expect(names).toContain('activity_member_created_idx');
+  });
+
+  it('predicates the active-membership index on removed_at, exactly', async () => {
+    const db = await useTestDatabase();
+
+    const result = await db.execute<{ indexdef: string }>(
+      sql`SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'members_group_user_active_idx'`,
+    );
+    const indexdef = result.rows[0]?.indexdef ?? '';
+
+    /**
+     * Compared on the normalised predicate rather than on the whole `indexdef`, whose spacing
+     * and parenthesisation are the server's business.
+     *
+     * The `removed_at IS NULL` clause is what the whole index turns on: without it, the row a
+     * person leaves behind still occupies their `(group_id, user_id)` slot, so rejoining the
+     * group they left would fail on a duplicate key. And without `user_id IS NOT NULL`, two
+     * placeholders in one group — both with no account yet — would collide.
+     */
+    const predicate = indexdef.slice(indexdef.indexOf('WHERE') + 'WHERE'.length);
+    expect(predicate.replace(/[()]/g, '').trim()).toBe('user_id IS NOT NULL AND removed_at IS NULL');
   });
 
   it('migrate() creates its own bookkeeping table, so a first boot on an empty database does not throw', async () => {
@@ -105,6 +144,15 @@ describe('the migration files themselves', () => {
     const migrations = loadMigrations();
     expect(migrations.length).toBeGreaterThan(0);
     expect(migrations[0]?.sql).toContain('CREATE TABLE "users"');
+
+    // The groups migration is a second generated file rather than an edit to the first: 0000
+    // may already be applied somewhere, and migrate() applies each tag exactly once.
+    const groups = migrations.find((migration) => migration.tag.includes('groups'));
+    expect(groups, 'no committed migration creates the groups tables').toBeTruthy();
+    expect(groups?.sql).toContain('CREATE TABLE "groups"');
+    expect(groups?.sql).toContain('CREATE TABLE "members"');
+    expect(groups?.sql).toContain('CREATE TABLE "activity"');
+    expect(groups?.sql).toContain('CREATE TYPE "public"."group_type"');
   });
 });
 

@@ -1,0 +1,111 @@
+import Link from 'next/link';
+
+import type { ActivityRow, GroupRow, MemberRow } from '@/lib/access';
+import { formatMinor } from '@/lib/money';
+import { Money } from '@/components/ui';
+
+/**
+ * The group overview's body.
+ *
+ * Synchronous and presentational, for the reason Shell and HomeEmpty are: the page that renders
+ * it is an async Server Component awaiting cookies(), which @testing-library/react cannot
+ * render, so extracting the markup is what lets a component test assert this screen's one h1
+ * and its exact empty-state strings.
+ *
+ * Balances are formatted here and never computed here: every figure comes from formatMinor over
+ * a bigint, and the direction is words beside the number rather than a sign or a colour.
+ */
+export function GroupOverview({
+  group,
+  members,
+  entries,
+}: {
+  group: GroupRow;
+  members: MemberRow[];
+  entries: ActivityRow[];
+}) {
+  return (
+    <div className="flex flex-col gap-space-6">
+      <header className="flex flex-col gap-space-1">
+        <Link href="/" className="inline-flex min-h-[44px] items-center text-base text-text-muted">
+          ← Your groups
+        </Link>
+        <h1>{group.name}</h1>
+        <p className="text-sm text-text-muted">
+          {group.type} · {group.currency}
+        </p>
+        {group.archivedAt ? (
+          <p role="status" className="text-base text-text-muted">
+            This group is archived.
+          </p>
+        ) : null}
+      </header>
+
+      <section className="flex flex-col gap-space-2">
+        <h2 className="text-xl">Balances</h2>
+        <ul className="flex flex-col">
+          {members.map((member) => (
+            <li
+              key={member.memberId}
+              className="flex min-h-[44px] items-center justify-between gap-space-3 border-b border-border py-space-3 last:border-b-0"
+            >
+              <span className="truncate">{member.displayName}</span>
+              {/* Every balance is zero in this piece, so the direction is always 'settled'. */}
+              <Money formatted={formatMinor(member.balanceMinor, group.currency)} direction="settled" />
+            </li>
+          ))}
+        </ul>
+        {/* Where the transfer list goes. docs/ui.md line 165 gives the sentence verbatim, with
+            an ASCII apostrophe — U+2019 fails CI rather than passing here and reading wrong. */}
+        <p className="text-base text-text-muted">Everyone&apos;s square in this group.</p>
+      </section>
+
+      <section className="flex flex-col gap-space-2">
+        <h2 className="text-xl">Recent activity</h2>
+        {entries.length === 0 ? (
+          // docs/ui.md line 123, and issue #4's IAC-2, word for word — the em dash is U+2014.
+          <p className="text-base text-text-muted">Nothing here yet — add the first expense.</p>
+        ) : (
+          <ul className="flex flex-col">
+            {entries.map((entry) => (
+              <li
+                key={entry.id}
+                className="flex min-h-[44px] items-center justify-between gap-space-3 border-b border-border py-space-3 last:border-b-0"
+              >
+                <span className="truncate">{describe(entry)}</span>
+                <span className="shrink-0 text-sm text-text-muted">
+                  {entry.createdAt.toISOString().slice(0, 10)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* The secondary action row ships with Members only: Add expense, Balances and Activity
+          each arrive with their own screen in #6, #8 and #10. */}
+      <nav aria-label="Group" className="flex flex-wrap gap-space-2">
+        <Link
+          href={`/groups/${group.id}/members`}
+          className="inline-flex min-h-[44px] items-center rounded-radius border border-border bg-surface px-space-4 font-medium"
+        >
+          Members
+        </Link>
+      </nav>
+    </div>
+  );
+}
+
+/** One feed entry in a sentence. The kinds are this piece's six, and no others exist yet. */
+function describe(entry: ActivityRow): string {
+  const who = entry.actorName ?? 'Somebody';
+  const what: Record<ActivityRow['kind'], string> = {
+    'group.created': 'created the group',
+    'group.renamed': 'renamed the group',
+    'group.archived': 'archived the group',
+    'member.joined': 'joined the group',
+    'member.left': 'left the group',
+    'member.removed': 'was removed from the group',
+  };
+  return `${who} ${what[entry.kind]}`;
+}

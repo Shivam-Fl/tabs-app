@@ -8,9 +8,9 @@ import { Button } from './button';
  * A confirmation dialog. 'use client' is applied deliberately, for the focus trap — not by
  * omission.
  *
- * No caller yet: destructive confirmations arrive with piece 2's destructive actions. It is
- * built here because the design system's floor is this ticket's job, and its absence would be
- * re-decided per screen.
+ * Called by piece 2's Leave and Remove controls (src/components/member-actions.tsx), the first
+ * destructive confirmations in the product. Archiving does not confirm: docs/ui.md exempts it
+ * because it is reversible and owner-only.
  */
 export interface DialogProps {
   open: boolean;
