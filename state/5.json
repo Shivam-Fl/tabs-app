@@ -1,7 +1,7 @@
 {
   "issue": 5,
   "pr": null,
-  "state": "triage",
+  "state": "planning",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -24,12 +24,17 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:17.361Z",
-  "updated_at": "2026-10-02T16:08:00.561Z",
+  "updated_at": "2026-10-02T16:08:24.042Z",
   "history": [
     {
       "at": "2026-10-02T16:08:00.561Z",
       "agent": "watchdog",
       "action": "-> triage"
+    },
+    {
+      "at": "2026-10-02T16:08:24.042Z",
+      "agent": "intake",
+      "action": "-> planning"
     }
   ],
   "epic": 1
