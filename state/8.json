@@ -19,13 +19,11 @@
   "halted": null,
   "pending": {
     "stage": "implement",
-    "rework": null,
-    "requested_at_head": null,
-    "qa_run": null,
-    "from": null,
-    "pr": null,
+    "rework": "reserved-paths",
+    "requested_at_head": "43ba267f114a210a4a5830edc88c4936651481d5",
+    "pr": 31,
     "work_order_version": 1,
-    "at": "2026-10-02T21:16:00.769Z"
+    "at": "2026-10-02T21:38:26.939Z"
   },
   "work_order": {
     "acceptance": [
