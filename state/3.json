@@ -516,17 +516,18 @@
       "AC-8",
       "AC-9",
       "AC-10",
-      "AC-11"
+      "AC-11",
+      "AC-12"
     ],
-    "sha": "598cda83e1fdbb384fc9a218fee9e36753a224bb",
-    "run_id": "36951425341",
-    "work_order_version": 1,
-    "at": "2026-10-02T02:21:36.266Z"
+    "sha": "d365f2ce89eaddf1f77e53d1f19b2a336703e25a",
+    "run_id": "36960062492",
+    "work_order_version": 2,
+    "at": "2026-10-02T04:39:03.824Z"
   },
   "qa_open_bugs": [
     {
-      "id": "BUG-1",
-      "title": "Four links render below the 44px minimum touch target docs/ui.md requires"
+      "id": "BUG-2",
+      "title": "The skip link in the new root layout is 40px tall and overlaps the brand link"
     }
   ]
 }
