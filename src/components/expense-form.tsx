@@ -3,7 +3,7 @@
 import { useActionState, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-import { createExpense } from '@/app/actions/expenses';
+import { createExpense, updateExpense } from '@/app/actions/expenses';
 import type { ExpenseResult } from '@/app/actions/expenses';
 import type { ExpenseCategory, ExpenseSplitType } from '@/db/schema';
 import {
@@ -23,6 +23,11 @@ import { Button, Field } from '@/components/ui';
  * Save, and resolving the split as it is edited with the SAME split() the server calls before it
  * writes, so the summary a person reads and the rows that get stored cannot disagree.
  *
+ * One component serves both writes. Given `initial` it is the edit screen: every field arrives
+ * seeded from the stored rule and Save submits updateExpense instead of createExpense. The
+ * seeding is what docs/ui.md's Expense form · empty asks for on an edit — there is no empty
+ * state there, not even for a split with a remainder, which opens as it was entered.
+ *
  * A Client Component for the reasons conventions.md gives: the split-type control swaps the
  * inputs shown without navigating, the summary and payer lines update as they are edited, and the
  * busy state on Save is only observable through useActionState. It imports money.ts and the
@@ -40,6 +45,36 @@ export interface ExpenseFormGroup {
   id: string;
   name: string;
   currency: string;
+}
+
+/**
+ * An expense as the edit form reopens it, already rendered back to text.
+ *
+ * Every number is a STRING in the exact form the matching input accepts, and none of it is
+ * re-derived here: the page reads the stored rule and turns it into text with src/lib/money.ts,
+ * so the form is a renderer of what was saved rather than a second opinion about it. That is what
+ * makes "an untouched save writes the same expense again" true — the text goes back through the
+ * same parser it came out of (AC-1, AC-2, AC-6).
+ *
+ * Passed only on the edit screen. Its presence is also what switches the submit to the update
+ * action, so there is no separate mode flag to disagree with it.
+ */
+export interface ExpenseFormInitial {
+  expenseId: string;
+  description: string;
+  amount: string;
+  date: string;
+  category: string;
+  note: string;
+  splitType: ExpenseSplitType;
+  /** The members whose boxes are ticked in the picker. */
+  participants: string[];
+  /** memberId -> the number they were given, for the split types that take one. */
+  inputs: Record<string, string>;
+  /** The members whose payer boxes are ticked. */
+  payers: string[];
+  /** memberId -> what that payer paid. */
+  payerAmounts: Record<string, string>;
 }
 
 const CATEGORIES: { value: ExpenseCategory; label: string }[] = [
@@ -91,6 +126,7 @@ export function ExpenseForm({
   group,
   members,
   today,
+  initial,
 }: {
   group: ExpenseFormGroup;
   members: ExpenseFormMember[];
@@ -99,31 +135,47 @@ export function ExpenseForm({
    * server, and a date worked out in two places either side of midnight is two different dates.
    */
   today: string;
+  /** Present on the edit screen only, and what makes this the update form rather than the create one. */
+  initial?: ExpenseFormInitial;
 }) {
   const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const categoryRef = useRef<HTMLSelectElement>(null);
-  const [state, formAction, pending] = useActionState<ExpenseResult | null, FormData>(createExpense, null);
-
-  const [description, setDescription] = useState('');
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState(today);
-  const [category, setCategory] = useState('');
-  const [note, setNote] = useState('');
-  const [splitType, setSplitType] = useState<ExpenseSplitType>('equal');
-  // Every active member is in the split until somebody says otherwise (AC-3).
-  const [participants, setParticipants] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(members.map((member) => [member.memberId, true])),
+  // One form, two writes: which action it submits to is decided by whether it was handed an
+  // expense to reopen, so there is no mode flag that could disagree with the seeded values.
+  const [state, formAction, pending] = useActionState<ExpenseResult | null, FormData>(
+    initial ? updateExpense : createExpense,
+    null,
   );
-  const [inputs, setInputs] = useState<Record<string, string>>({});
+
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [amount, setAmount] = useState(initial?.amount ?? '');
+  const [date, setDate] = useState(initial?.date ?? today);
+  const [category, setCategory] = useState(initial?.category ?? '');
+  const [note, setNote] = useState(initial?.note ?? '');
+  const [splitType, setSplitType] = useState<ExpenseSplitType>(initial?.splitType ?? 'equal');
+  // Every active member is in the split on a new expense (AC-3); on an edit exactly the members
+  // the expense was saved with are, including any who have since left the group.
+  const [participants, setParticipants] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      members.map((member) => [member.memberId, initial ? initial.participants.includes(member.memberId) : true]),
+    ),
+  );
+  const [inputs, setInputs] = useState<Record<string, string>>(() => ({ ...initial?.inputs }));
   // The first member in canonical order pays the whole thing until a second box is ticked. One
   // person paying is the ordinary case, and making it take two more keystrokes is how a one-pass
   // form stops being one pass. Canonical order is the server's own (owner, then created_at, then
   // id), which is the order this list arrived in — the remainder rule is defined against it.
-  const [payers, setPayers] = useState<Record<string, boolean>>(() =>
-    members[0] ? { [members[0].memberId]: true } : {},
-  );
-  const [payerAmounts, setPayerAmounts] = useState<Record<string, string>>({});
+  const [payers, setPayers] = useState<Record<string, boolean>>(() => {
+    if (initial) return Object.fromEntries(initial.payers.map((memberId) => [memberId, true]));
+    return members[0] ? { [members[0].memberId]: true } : {};
+  });
+  // Seeded on edit, so the one-payer fallback below never fires on the initial render: an
+  // expense whose single payer put in part of the total would otherwise open showing the whole
+  // total beside their name, and an untouched save would then store that instead.
+  const [payerAmounts, setPayerAmounts] = useState<Record<string, string>>(() => ({
+    ...initial?.payerAmounts,
+  }));
 
   useEffect(() => {
     if (state?.ok && state.groupId) router.push(`/groups/${state.groupId}/expenses`);
@@ -273,6 +325,7 @@ export function ExpenseForm({
   return (
     <form ref={formRef} action={formAction} className="flex max-w-[420px] flex-col gap-space-4" noValidate>
       <input type="hidden" name="groupId" value={group.id} />
+      {initial ? <input type="hidden" name="expenseId" value={initial.expenseId} /> : null}
 
       {/* The currency's symbol, fixed and not editable: the group's currency was decided when the
           group was made, and an amount typed against the wrong symbol is a wrong amount. */}
