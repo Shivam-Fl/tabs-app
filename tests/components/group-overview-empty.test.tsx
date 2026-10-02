@@ -32,7 +32,13 @@ const group: GroupRow = {
   archivedAt: null,
 };
 
-const member: MemberRow = { memberId: 'm-1', displayName: 'Priya', isOwner: true, balanceMinor: 0n };
+const member: MemberRow = {
+  memberId: 'm-1',
+  displayName: 'Priya',
+  isOwner: true,
+  isPlaceholder: false,
+  balanceMinor: 0n,
+};
 
 const entry: ActivityRow = {
   id: 'a-1',

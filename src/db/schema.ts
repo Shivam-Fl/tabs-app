@@ -88,9 +88,17 @@ export const members = pgTable(
     groupId: uuid('group_id')
       .notNull()
       .references(() => groups.id, { onDelete: 'cascade' }),
-    // Null until a placeholder is claimed, which piece 5 builds. Every member in this piece
-    // has an account.
+    // Null while the member is a placeholder and set when one is claimed. A claimed row keeps
+    // the name it was created with — the name written here is for the placeholder that has no
+    // account to take one from, and every read prefers the live profile where there is one.
     userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * The name a placeholder was given before its owner had an account. Null for every member
+     * who has one, and never the column a read presents: readMembers coalesces
+     * users.display_name ?? members.display_name, so a claimed placeholder shows the claimer's
+     * live profile name while the stored one stays as the record of what was typed.
+     */
+    displayName: text('display_name'),
     isOwner: boolean('is_owner').notNull().default(false),
     // Removal sets this; the row is NEVER deleted, because a stored share or payer record
     // points at it and discarding it would restate every other member's balance (TR-16).
@@ -128,9 +136,13 @@ export const activityKinds = [
   'group.created',
   'group.renamed',
   'group.archived',
+  'group.invite_rotated',
+  'group.invite_disabled',
   'member.joined',
   'member.left',
   'member.removed',
+  'member.placeholder_added',
+  'member.claimed',
 ] as const;
 
 export type ActivityKind = (typeof activityKinds)[number];

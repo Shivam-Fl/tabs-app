@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { z } from 'zod';
 
 import { database } from '@/db/client';
-import { readGroup, readMembers, readMembership } from '@/lib/access';
+import { readGroup, readInviteForMember, readMembers, readMembership } from '@/lib/access';
 import { requireUser } from '@/lib/auth';
 import { MembersScreen } from '@/components/members-screen';
 
@@ -25,7 +25,10 @@ export default async function MembersPage({ params }: { params: Promise<{ id: st
   const group = await readGroup(db, parsed.data.id, user.id);
   const membership = await readMembership(db, parsed.data.id, user.id);
   const members = await readMembers(db, parsed.data.id, user.id);
-  if (!group || !membership || !members) notFound();
+  // Member-scoped like the rest: a non-member gets null here and the not-found page above
+  // rather than a group whose invite link they can read.
+  const invite = membership ? await readInviteForMember(db, parsed.data.id, user.id) : null;
+  if (!group || !membership || !members || !invite) notFound();
 
-  return <MembersScreen group={group} members={members} viewer={membership} />;
+  return <MembersScreen group={group} members={members} viewer={membership} invite={invite} />;
 }
