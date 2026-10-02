@@ -18,7 +18,139 @@
   },
   "halted": null,
   "pending": null,
-  "work_order": null,
+  "work_order": {
+    "acceptance": [
+      {
+        "check": "Confirming the same invite link twice lands the second user in the group with no error: the second confirm renders the already-a-member state with a working Open link, not a 500.",
+        "how_to_verify": "Sign up as owner, create a group, copy the invite link; sign up a second user, open the link, confirm, go back, confirm again.",
+        "id": "AC-1",
+        "source": "TR-14",
+        "verify": "browser"
+      },
+      {
+        "check": "A duplicate join insert against an existing active membership is a silent no-op (zero rows) rather than a unique violation, proving the ON CONFLICT target matches members_group_user_active_idx.",
+        "how_to_verify": "CI runs the new duplicate-insert case in tests/integration/invites.test.ts; a predicate that does not match the partial index raises instead of returning empty.",
+        "id": "AC-2",
+        "source": "TR-14",
+        "verify": "test"
+      },
+      {
+        "check": "Confirming Leave on /groups/<id>/members navigates to /?left=<groupId> showing the 'You left <group> · Undo' notice, instead of stranding the user on the not-found members page.",
+        "how_to_verify": "Sign up as owner, create a group; sign up a second user, join via the invite link, open the members page, click Leave, confirm; the URL is /?left=<id> with the notice visible.",
+        "id": "AC-3",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "Clicking Undo in that notice restores the membership and the group reappears on the home list.",
+        "how_to_verify": "Immediately after AC-3, click Undo; the notice clears and the group row returns.",
+        "id": "AC-4",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "Removing another member as the owner still happens in place on the members page with no navigation.",
+        "how_to_verify": "As the owner on the members page, remove a member; the row disappears and the URL stays on /groups/<id>/members.",
+        "id": "AC-5",
+        "source": "TR-13",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Throw redirect('/?left=...') from leaveGroup after the commit",
+        "rejected_because": "Breaks the typed MemberResult contract every client and test relies on, and the codebase documents navigation as the client's job because a redirect thrown from an action unwinds its transaction (src/app/actions/groups.ts:21, src/components/join-screen.tsx:24-25)."
+      },
+      {
+        "approach": "Keep rendering the members screen after a leave instead of notFound so LeaveButton stays mounted",
+        "rejected_because": "TR-1 requires a non-member to get the not-found page rather than a list that confirms the group exists."
+      },
+      {
+        "approach": "Serializable transactions or an advisory lock around joinGroupIfAbsent",
+        "rejected_because": "ON CONFLICT DO NOTHING is the native idempotent write and keeps the existing empty-RETURNING no-op path that joinWithToken already handles."
+      }
+    ],
+    "approach": "Two minimal fixes, one per finding, neither changing a contract. (1) In joinGroupIfAbsent (src/lib/access.ts:526-534), append 'ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING' between the WHERE NOT EXISTS select and RETURNING, keeping the existing empty-RETURNING-means-no-op mapping. The WHERE NOT EXISTS stays as the fast path; the ON CONFLICT clause is the backstop that turns the loser's unique violation under READ COMMITTED overlap into the same graceful no-op PGlite already proves. joinWithToken needs no change: it only writes member.joined when a memberId came back and returns the group id either way, so both racers answer ok:true with exactly one row and one feed entry. (2) In useMemberAction (src/components/member-actions.tsx:18-37), move the onSuccess call out of the useEffect-on-state and into the awaited action continuation: wrap the action so the resolved MemberResult is passed to onSuccessRef before being returned to useActionState, and delete the state effect. An unmount (the revalidatePath in leaveGroup re-rendering the members page to notFound) discards the state update and the effect with it, but it cannot cancel the pending promise continuation, so router.push('/?left=...') now survives exactly the commit that used to take it with the component. This is the same bug class src/components/join-screen.tsx:14-20 documents, fixed the only way TR-1 allows here: the page must notFound for a non-member, so the navigation must not depend on staying mounted. RemoveButton's noop onSuccess, the typed results, and the revalidatePath calls are all untouched.",
+    "assumptions": [
+      "Neon runs the default READ COMMITTED isolation, which is what makes the overlapping-pair violation possible.",
+      "PGlite matches Postgres ON CONFLICT and partial-index predicate semantics, so the new duplicate-insert case proves the conflict target matches.",
+      "LeaveButton is only rendered on the members page (src/components/members-screen.tsx:75-77); no other screen depends on its navigation."
+    ],
+    "confidence": 85,
+    "confidence_rationale": "Both root causes read verbatim in the current code and both fixes follow precedents this repo already documents (join-screen unmount note, navigation-is-the-client's-job rule); the only thing CI cannot prove is a truly overlapping pair of transactions on Neon.",
+    "evidence": [
+      "src/lib/access.ts:524-537 INSERT..SELECT..WHERE NOT EXISTS with bare RETURNING and no ON CONFLICT",
+      "drizzle/0001_create_groups_members_activity.sql:39 partial unique index members_group_user_active_idx on (group_id, user_id) where user_id is not null and removed_at is null",
+      "src/components/member-actions.tsx:32-34 navigation lives in a useEffect on action state",
+      "src/app/actions/members.ts:299 leaveGroup calls revalidatePath('/', 'layout')",
+      "src/app/(app)/groups/[id]/members/page.tsx:31 members page calls notFound() once the membership is gone",
+      "src/components/join-screen.tsx:14-20 documents the same revalidation-unmounts-navigation bug class and its fix",
+      "tests/integration/invites.test.ts:216-228 the PGlite race test serializes, so it cannot stage the overlapping pair",
+      "docs/ui.md:78-80 leaving must show 'You left <group> · Undo' on the group list for ten seconds"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "In joinGroupIfAbsent, add ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING between the WHERE NOT EXISTS select and RETURNING id, and extend the doc comment to say the concurrent loser now takes the same empty-RETURNING no-op path instead of raising a unique violation. Keep the WHERE NOT EXISTS clause and the inserted.rows[0]?.id ?? null mapping exactly as they are.",
+        "path": "src/lib/access.ts",
+        "why": "The INSERT..WHERE NOT EXISTS shape still races under READ COMMITTED; the partial-index predicate as conflict target makes the loser a silent no-op."
+      },
+      {
+        "action": "edit",
+        "change": "In useMemberAction, wrap the passed action so the awaited MemberResult is handed to onSuccessRef when ok before being returned to useActionState, and remove the useEffect that invoked onSuccess from state. LeaveButton and RemoveButton call sites stay as they are. Update the hook comment to state why: the leave write revalidates the members page to notFound, unmounting this component in the committing render, and the promise continuation outlives the unmount while the effect does not.",
+        "path": "src/components/member-actions.tsx",
+        "why": "Navigation that depends on a component the same write unmounts never fires; the awaited continuation cannot be unmounted."
+      }
+    ],
+    "issue": 23,
+    "kind": "bug",
+    "mode": "committed",
+    "out_of_scope": [
+      "Server-side redirect for leave: rejected, not deferred — navigation is documented as the client's job and a throw inside the action unwinds its transaction.",
+      "No-JS leave landing: unchanged; the form posts the same body and the action answers the same typed result as before.",
+      "Placeholder-claim races: already atomic via mergeClaimPlaceholder; untouched.",
+      "Owner-leave, ownership transfer, and last-member policy: untouched."
+    ],
+    "qa_script": [
+      "Boot the app (npm run sdlc:serve) and sign up an owner; create a group named Lisbon.",
+      "Copy the invite link; sign up a second user, open the link and confirm twice: second confirm shows the already-in state with a working Open link and no error.",
+      "As the member, open the members page, click Leave, confirm: expect navigation to /?left=<id> with the 'You left Lisbon · Undo' notice.",
+      "Click Undo within ten seconds: the notice clears and Lisbon returns to the list.",
+      "As the owner, remove a member from the members page: the row disappears and the page stays put with no navigation.",
+      "Reload home after eleven seconds with ?left= still in the URL: no notice renders."
+    ],
+    "reproduced": true,
+    "risks": [
+      "The ON CONFLICT predicate must match the partial unique index exactly or Postgres raises at runtime instead of doing nothing; the new duplicate-insert integration case runs the same semantics on PGlite and fails loudly on a mismatch.",
+      "A truly overlapping pair of join transactions cannot be staged on PGlite or in CI; the Neon overlap is proven by inspection, and a preview pointed at a Neon branch is the only live proof.",
+      "useMemberAction is shared with RemoveButton; its onSuccess is a noop so in-place removal behavior is unchanged, guarded by the new component case asserting no navigation."
+    ],
+    "root_cause": "Two unrelated defects filed as one ticket. (1) joinGroupIfAbsent writes INSERT..SELECT..WHERE NOT EXISTS with a bare RETURNING; under READ COMMITTED two overlapping same-user joins both pass NOT EXISTS and the loser raises a unique violation on members_group_user_active_idx instead of taking the no-op path, which surfaces as a 500 on Neon. PGlite serializes statements so the existing racing-confirms test cannot show it. (2) LeaveButton navigates via a useEffect on the action result, but leaveGroup's revalidatePath re-renders the members page to notFound (the caller is no longer a member), unmounting LeaveButton in the same commit that delivers the result — the effect never runs and the user strands on 'This group isn't available' with the Undo notice unreachable. Severity reassessed from QA's minor to moderate: the membership write is correct and nothing is lost, but the only Undo affordance for a reversible action is unreachable from the members page, which is where a member leaves.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "A duplicate join insert carrying the new ON CONFLICT predicate against an existing active membership returns zero rows and raises nothing, proving the conflict target matches members_group_user_active_idx (a mismatched predicate raises instead of returning empty).",
+          "The existing sequential double-confirm no-op case and the racing-confirms ok/ok case keep passing unchanged with one row and one member.joined entry."
+        ],
+        "path": "tests/integration/invites.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "Leave confirmed and the component unmounted before the action resolves still pushes /?left=<groupId> to the router; this fails on the old effect-based navigation and passes on the continuation.",
+          "A refused leave (ok:false with a formError) pushes nothing and renders the sentence in place.",
+          "A successful removal pushes nothing and stays on the page, guarding the shared hook's other caller."
+        ],
+        "path": "tests/components/member-actions.test.tsx"
+      }
+    ],
+    "understanding": "Follow-ups from #5/PR #22, one ticket for two unrelated defects: (1) concurrent same-user group joins can 500 on Neon because joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS without ON CONFLICT, so the loser of a truly overlapping pair hits the partial unique index instead of the graceful no-op; (2) leaving a group from the members page strands the member on the not-found members page instead of home with the 'You left <group> · Undo' notice, because revalidatePath unmounts LeaveButton before its state.ok effect can navigate. Both reproduce in the code as it stands; neither was fixed by a later round.",
+    "unknowns": [
+      "Whether QA can stage two truly overlapping join transactions against a Neon-backed preview to prove the race end-to-end."
+    ],
+    "version": 1
+  },
   "touch_paths": [],
   "acceptance": [],
   "planned_route": [
@@ -73,274 +205,12 @@
   },
   "stopped_at": null,
   "dispatched_stage": "debug",
-  "validated_work_order": {
-    "acceptance": [
-      {
-        "check": "Confirming the same invite link twice lands the second user in the group with no error: the second confirm renders the already-a-member state with a working Open link, not a 500.",
-        "how_to_verify": "Sign up as owner, create a group, copy the invite link; sign up a second user, open the link, confirm, go back, confirm again.",
-        "id": "AC-1",
-        "source": "TR-14",
-        "verify": "browser"
-      },
-      {
-        "check": "A duplicate join insert against an existing active membership is a silent no-op (zero rows) rather than a unique violation, proving the ON CONFLICT target matches members_group_user_active_idx.",
-        "how_to_verify": "CI runs the new duplicate-insert case in tests/integration/invites.test.ts; a predicate that does not match the partial index raises instead of returning empty.",
-        "id": "AC-2",
-        "source": "TR-14",
-        "verify": "test"
-      },
-      {
-        "check": "Confirming Leave on /groups/<id>/members navigates to /?left=<groupId> showing the 'You left <group> · Undo' notice, instead of stranding the user on the not-found members page.",
-        "how_to_verify": "Sign up as owner, create a group; sign up a second user, join via the invite link, open the members page, click Leave, confirm; the URL is /?left=<id> with the notice visible.",
-        "id": "AC-3",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      {
-        "check": "Clicking Undo in that notice restores the membership and the group reappears on the home list.",
-        "how_to_verify": "Immediately after AC-3, click Undo; the notice clears and the group row returns.",
-        "id": "AC-4",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      {
-        "check": "Removing another member as the owner still happens in place on the members page with no navigation.",
-        "how_to_verify": "As the owner on the members page, remove a member; the row disappears and the URL stays on /groups/<id>/members.",
-        "id": "AC-5",
-        "source": "TR-13",
-        "verify": "browser"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Throw redirect('/?left=...') from leaveGroup after the commit",
-        "rejected_because": "Breaks the typed MemberResult contract every client and test relies on, and the codebase documents navigation as the client's job because a redirect thrown from an action unwinds its transaction (src/app/actions/groups.ts:21, src/components/join-screen.tsx:24-25)."
-      },
-      {
-        "approach": "Keep rendering the members screen after a leave instead of notFound so LeaveButton stays mounted",
-        "rejected_because": "TR-1 requires a non-member to get the not-found page rather than a list that confirms the group exists."
-      },
-      {
-        "approach": "Serializable transactions or an advisory lock around joinGroupIfAbsent",
-        "rejected_because": "ON CONFLICT DO NOTHING is the native idempotent write and keeps the existing empty-RETURNING no-op path that joinWithToken already handles."
-      }
-    ],
-    "approach": "Two minimal fixes, one per finding, neither changing a contract. (1) In joinGroupIfAbsent (src/lib/access.ts:526-534), append 'ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING' between the WHERE NOT EXISTS select and RETURNING, keeping the existing empty-RETURNING-means-no-op mapping. The WHERE NOT EXISTS stays as the fast path; the ON CONFLICT clause is the backstop that turns the loser's unique violation under READ COMMITTED overlap into the same graceful no-op PGlite already proves. joinWithToken needs no change: it only writes member.joined when a memberId came back and returns the group id either way, so both racers answer ok:true with exactly one row and one feed entry. (2) In useMemberAction (src/components/member-actions.tsx:18-37), move the onSuccess call out of the useEffect-on-state and into the awaited action continuation: wrap the action so the resolved MemberResult is passed to onSuccessRef before being returned to useActionState, and delete the state effect. An unmount (the revalidatePath in leaveGroup re-rendering the members page to notFound) discards the state update and the effect with it, but it cannot cancel the pending promise continuation, so router.push('/?left=...') now survives exactly the commit that used to take it with the component. This is the same bug class src/components/join-screen.tsx:14-20 documents, fixed the only way TR-1 allows here: the page must notFound for a non-member, so the navigation must not depend on staying mounted. RemoveButton's noop onSuccess, the typed results, and the revalidatePath calls are all untouched.",
-    "assumptions": [
-      "Neon runs the default READ COMMITTED isolation, which is what makes the overlapping-pair violation possible.",
-      "PGlite matches Postgres ON CONFLICT and partial-index predicate semantics, so the new duplicate-insert case proves the conflict target matches.",
-      "LeaveButton is only rendered on the members page (src/components/members-screen.tsx:75-77); no other screen depends on its navigation."
-    ],
-    "confidence": 85,
-    "confidence_rationale": "Both root causes read verbatim in the current code and both fixes follow precedents this repo already documents (join-screen unmount note, navigation-is-the-client's-job rule); the only thing CI cannot prove is a truly overlapping pair of transactions on Neon.",
-    "evidence": [
-      "src/lib/access.ts:524-537 INSERT..SELECT..WHERE NOT EXISTS with bare RETURNING and no ON CONFLICT",
-      "drizzle/0001_create_groups_members_activity.sql:39 partial unique index members_group_user_active_idx on (group_id, user_id) where user_id is not null and removed_at is null",
-      "src/components/member-actions.tsx:32-34 navigation lives in a useEffect on action state",
-      "src/app/actions/members.ts:299 leaveGroup calls revalidatePath('/', 'layout')",
-      "src/app/(app)/groups/[id]/members/page.tsx:31 members page calls notFound() once the membership is gone",
-      "src/components/join-screen.tsx:14-20 documents the same revalidation-unmounts-navigation bug class and its fix",
-      "tests/integration/invites.test.ts:216-228 the PGlite race test serializes, so it cannot stage the overlapping pair",
-      "docs/ui.md:78-80 leaving must show 'You left <group> · Undo' on the group list for ten seconds"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "In joinGroupIfAbsent, add ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING between the WHERE NOT EXISTS select and RETURNING id, and extend the doc comment to say the concurrent loser now takes the same empty-RETURNING no-op path instead of raising a unique violation. Keep the WHERE NOT EXISTS clause and the inserted.rows[0]?.id ?? null mapping exactly as they are.",
-        "path": "src/lib/access.ts",
-        "why": "The INSERT..WHERE NOT EXISTS shape still races under READ COMMITTED; the partial-index predicate as conflict target makes the loser a silent no-op."
-      },
-      {
-        "action": "edit",
-        "change": "In useMemberAction, wrap the passed action so the awaited MemberResult is handed to onSuccessRef when ok before being returned to useActionState, and remove the useEffect that invoked onSuccess from state. LeaveButton and RemoveButton call sites stay as they are. Update the hook comment to state why: the leave write revalidates the members page to notFound, unmounting this component in the committing render, and the promise continuation outlives the unmount while the effect does not.",
-        "path": "src/components/member-actions.tsx",
-        "why": "Navigation that depends on a component the same write unmounts never fires; the awaited continuation cannot be unmounted."
-      }
-    ],
-    "issue": 23,
-    "kind": "bug",
-    "mode": "committed",
-    "out_of_scope": [
-      "Server-side redirect for leave: rejected, not deferred — navigation is documented as the client's job and a throw inside the action unwinds its transaction.",
-      "No-JS leave landing: unchanged; the form posts the same body and the action answers the same typed result as before.",
-      "Placeholder-claim races: already atomic via mergeClaimPlaceholder; untouched.",
-      "Owner-leave, ownership transfer, and last-member policy: untouched."
-    ],
-    "qa_script": [
-      "Boot the app (npm run sdlc:serve) and sign up an owner; create a group named Lisbon.",
-      "Copy the invite link; sign up a second user, open the link and confirm twice: second confirm shows the already-in state with a working Open link and no error.",
-      "As the member, open the members page, click Leave, confirm: expect navigation to /?left=<id> with the 'You left Lisbon · Undo' notice.",
-      "Click Undo within ten seconds: the notice clears and Lisbon returns to the list.",
-      "As the owner, remove a member from the members page: the row disappears and the page stays put with no navigation.",
-      "Reload home after eleven seconds with ?left= still in the URL: no notice renders."
-    ],
-    "reproduced": true,
-    "risks": [
-      "The ON CONFLICT predicate must match the partial unique index exactly or Postgres raises at runtime instead of doing nothing; the new duplicate-insert integration case runs the same semantics on PGlite and fails loudly on a mismatch.",
-      "A truly overlapping pair of join transactions cannot be staged on PGlite or in CI; the Neon overlap is proven by inspection, and a preview pointed at a Neon branch is the only live proof.",
-      "useMemberAction is shared with RemoveButton; its onSuccess is a noop so in-place removal behavior is unchanged, guarded by the new component case asserting no navigation."
-    ],
-    "root_cause": "Two unrelated defects filed as one ticket. (1) joinGroupIfAbsent writes INSERT..SELECT..WHERE NOT EXISTS with a bare RETURNING; under READ COMMITTED two overlapping same-user joins both pass NOT EXISTS and the loser raises a unique violation on members_group_user_active_idx instead of taking the no-op path, which surfaces as a 500 on Neon. PGlite serializes statements so the existing racing-confirms test cannot show it. (2) LeaveButton navigates via a useEffect on the action result, but leaveGroup's revalidatePath re-renders the members page to notFound (the caller is no longer a member), unmounting LeaveButton in the same commit that delivers the result — the effect never runs and the user strands on 'This group isn't available' with the Undo notice unreachable. Severity reassessed from QA's minor to moderate: the membership write is correct and nothing is lost, but the only Undo affordance for a reversible action is unreachable from the members page, which is where a member leaves.",
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "A duplicate join insert carrying the new ON CONFLICT predicate against an existing active membership returns zero rows and raises nothing, proving the conflict target matches members_group_user_active_idx (a mismatched predicate raises instead of returning empty).",
-          "The existing sequential double-confirm no-op case and the racing-confirms ok/ok case keep passing unchanged with one row and one member.joined entry."
-        ],
-        "path": "tests/integration/invites.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "Leave confirmed and the component unmounted before the action resolves still pushes /?left=<groupId> to the router; this fails on the old effect-based navigation and passes on the continuation.",
-          "A refused leave (ok:false with a formError) pushes nothing and renders the sentence in place.",
-          "A successful removal pushes nothing and stays on the page, guarding the shared hook's other caller."
-        ],
-        "path": "tests/components/member-actions.test.tsx"
-      }
-    ],
-    "understanding": "Follow-ups from #5/PR #22, one ticket for two unrelated defects: (1) concurrent same-user group joins can 500 on Neon because joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS without ON CONFLICT, so the loser of a truly overlapping pair hits the partial unique index instead of the graceful no-op; (2) leaving a group from the members page strands the member on the not-found members page instead of home with the 'You left <group> · Undo' notice, because revalidatePath unmounts LeaveButton before its state.ok effect can navigate. Both reproduce in the code as it stands; neither was fixed by a later round.",
-    "unknowns": [
-      "Whether QA can stage two truly overlapping join transactions against a Neon-backed preview to prove the race end-to-end."
-    ],
-    "version": 1
-  },
   "validated_from": "plan",
   "validated_at": "2026-10-02T19:02:49.390Z",
   "validated_ac_changes": [],
-  "approved_work_order": {
-    "acceptance": [
-      {
-        "check": "Confirming the same invite link twice lands the second user in the group with no error: the second confirm renders the already-a-member state with a working Open link, not a 500.",
-        "how_to_verify": "Sign up as owner, create a group, copy the invite link; sign up a second user, open the link, confirm, go back, confirm again.",
-        "id": "AC-1",
-        "source": "TR-14",
-        "verify": "browser"
-      },
-      {
-        "check": "A duplicate join insert against an existing active membership is a silent no-op (zero rows) rather than a unique violation, proving the ON CONFLICT target matches members_group_user_active_idx.",
-        "how_to_verify": "CI runs the new duplicate-insert case in tests/integration/invites.test.ts; a predicate that does not match the partial index raises instead of returning empty.",
-        "id": "AC-2",
-        "source": "TR-14",
-        "verify": "test"
-      },
-      {
-        "check": "Confirming Leave on /groups/<id>/members navigates to /?left=<groupId> showing the 'You left <group> · Undo' notice, instead of stranding the user on the not-found members page.",
-        "how_to_verify": "Sign up as owner, create a group; sign up a second user, join via the invite link, open the members page, click Leave, confirm; the URL is /?left=<id> with the notice visible.",
-        "id": "AC-3",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      {
-        "check": "Clicking Undo in that notice restores the membership and the group reappears on the home list.",
-        "how_to_verify": "Immediately after AC-3, click Undo; the notice clears and the group row returns.",
-        "id": "AC-4",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      {
-        "check": "Removing another member as the owner still happens in place on the members page with no navigation.",
-        "how_to_verify": "As the owner on the members page, remove a member; the row disappears and the URL stays on /groups/<id>/members.",
-        "id": "AC-5",
-        "source": "TR-13",
-        "verify": "browser"
-      }
-    ],
-    "alternatives_considered": [
-      {
-        "approach": "Throw redirect('/?left=...') from leaveGroup after the commit",
-        "rejected_because": "Breaks the typed MemberResult contract every client and test relies on, and the codebase documents navigation as the client's job because a redirect thrown from an action unwinds its transaction (src/app/actions/groups.ts:21, src/components/join-screen.tsx:24-25)."
-      },
-      {
-        "approach": "Keep rendering the members screen after a leave instead of notFound so LeaveButton stays mounted",
-        "rejected_because": "TR-1 requires a non-member to get the not-found page rather than a list that confirms the group exists."
-      },
-      {
-        "approach": "Serializable transactions or an advisory lock around joinGroupIfAbsent",
-        "rejected_because": "ON CONFLICT DO NOTHING is the native idempotent write and keeps the existing empty-RETURNING no-op path that joinWithToken already handles."
-      }
-    ],
-    "approach": "Two minimal fixes, one per finding, neither changing a contract. (1) In joinGroupIfAbsent (src/lib/access.ts:526-534), append 'ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING' between the WHERE NOT EXISTS select and RETURNING, keeping the existing empty-RETURNING-means-no-op mapping. The WHERE NOT EXISTS stays as the fast path; the ON CONFLICT clause is the backstop that turns the loser's unique violation under READ COMMITTED overlap into the same graceful no-op PGlite already proves. joinWithToken needs no change: it only writes member.joined when a memberId came back and returns the group id either way, so both racers answer ok:true with exactly one row and one feed entry. (2) In useMemberAction (src/components/member-actions.tsx:18-37), move the onSuccess call out of the useEffect-on-state and into the awaited action continuation: wrap the action so the resolved MemberResult is passed to onSuccessRef before being returned to useActionState, and delete the state effect. An unmount (the revalidatePath in leaveGroup re-rendering the members page to notFound) discards the state update and the effect with it, but it cannot cancel the pending promise continuation, so router.push('/?left=...') now survives exactly the commit that used to take it with the component. This is the same bug class src/components/join-screen.tsx:14-20 documents, fixed the only way TR-1 allows here: the page must notFound for a non-member, so the navigation must not depend on staying mounted. RemoveButton's noop onSuccess, the typed results, and the revalidatePath calls are all untouched.",
-    "assumptions": [
-      "Neon runs the default READ COMMITTED isolation, which is what makes the overlapping-pair violation possible.",
-      "PGlite matches Postgres ON CONFLICT and partial-index predicate semantics, so the new duplicate-insert case proves the conflict target matches.",
-      "LeaveButton is only rendered on the members page (src/components/members-screen.tsx:75-77); no other screen depends on its navigation."
-    ],
-    "confidence": 85,
-    "confidence_rationale": "Both root causes read verbatim in the current code and both fixes follow precedents this repo already documents (join-screen unmount note, navigation-is-the-client's-job rule); the only thing CI cannot prove is a truly overlapping pair of transactions on Neon.",
-    "evidence": [
-      "src/lib/access.ts:524-537 INSERT..SELECT..WHERE NOT EXISTS with bare RETURNING and no ON CONFLICT",
-      "drizzle/0001_create_groups_members_activity.sql:39 partial unique index members_group_user_active_idx on (group_id, user_id) where user_id is not null and removed_at is null",
-      "src/components/member-actions.tsx:32-34 navigation lives in a useEffect on action state",
-      "src/app/actions/members.ts:299 leaveGroup calls revalidatePath('/', 'layout')",
-      "src/app/(app)/groups/[id]/members/page.tsx:31 members page calls notFound() once the membership is gone",
-      "src/components/join-screen.tsx:14-20 documents the same revalidation-unmounts-navigation bug class and its fix",
-      "tests/integration/invites.test.ts:216-228 the PGlite race test serializes, so it cannot stage the overlapping pair",
-      "docs/ui.md:78-80 leaving must show 'You left <group> · Undo' on the group list for ten seconds"
-    ],
-    "files": [
-      {
-        "action": "edit",
-        "change": "In joinGroupIfAbsent, add ON CONFLICT (group_id, user_id) WHERE user_id IS NOT NULL AND removed_at IS NULL DO NOTHING between the WHERE NOT EXISTS select and RETURNING id, and extend the doc comment to say the concurrent loser now takes the same empty-RETURNING no-op path instead of raising a unique violation. Keep the WHERE NOT EXISTS clause and the inserted.rows[0]?.id ?? null mapping exactly as they are.",
-        "path": "src/lib/access.ts",
-        "why": "The INSERT..WHERE NOT EXISTS shape still races under READ COMMITTED; the partial-index predicate as conflict target makes the loser a silent no-op."
-      },
-      {
-        "action": "edit",
-        "change": "In useMemberAction, wrap the passed action so the awaited MemberResult is handed to onSuccessRef when ok before being returned to useActionState, and remove the useEffect that invoked onSuccess from state. LeaveButton and RemoveButton call sites stay as they are. Update the hook comment to state why: the leave write revalidates the members page to notFound, unmounting this component in the committing render, and the promise continuation outlives the unmount while the effect does not.",
-        "path": "src/components/member-actions.tsx",
-        "why": "Navigation that depends on a component the same write unmounts never fires; the awaited continuation cannot be unmounted."
-      }
-    ],
-    "issue": 23,
-    "kind": "bug",
-    "mode": "committed",
-    "out_of_scope": [
-      "Server-side redirect for leave: rejected, not deferred — navigation is documented as the client's job and a throw inside the action unwinds its transaction.",
-      "No-JS leave landing: unchanged; the form posts the same body and the action answers the same typed result as before.",
-      "Placeholder-claim races: already atomic via mergeClaimPlaceholder; untouched.",
-      "Owner-leave, ownership transfer, and last-member policy: untouched."
-    ],
-    "qa_script": [
-      "Boot the app (npm run sdlc:serve) and sign up an owner; create a group named Lisbon.",
-      "Copy the invite link; sign up a second user, open the link and confirm twice: second confirm shows the already-in state with a working Open link and no error.",
-      "As the member, open the members page, click Leave, confirm: expect navigation to /?left=<id> with the 'You left Lisbon · Undo' notice.",
-      "Click Undo within ten seconds: the notice clears and Lisbon returns to the list.",
-      "As the owner, remove a member from the members page: the row disappears and the page stays put with no navigation.",
-      "Reload home after eleven seconds with ?left= still in the URL: no notice renders."
-    ],
-    "reproduced": true,
-    "risks": [
-      "The ON CONFLICT predicate must match the partial unique index exactly or Postgres raises at runtime instead of doing nothing; the new duplicate-insert integration case runs the same semantics on PGlite and fails loudly on a mismatch.",
-      "A truly overlapping pair of join transactions cannot be staged on PGlite or in CI; the Neon overlap is proven by inspection, and a preview pointed at a Neon branch is the only live proof.",
-      "useMemberAction is shared with RemoveButton; its onSuccess is a noop so in-place removal behavior is unchanged, guarded by the new component case asserting no navigation."
-    ],
-    "root_cause": "Two unrelated defects filed as one ticket. (1) joinGroupIfAbsent writes INSERT..SELECT..WHERE NOT EXISTS with a bare RETURNING; under READ COMMITTED two overlapping same-user joins both pass NOT EXISTS and the loser raises a unique violation on members_group_user_active_idx instead of taking the no-op path, which surfaces as a 500 on Neon. PGlite serializes statements so the existing racing-confirms test cannot show it. (2) LeaveButton navigates via a useEffect on the action result, but leaveGroup's revalidatePath re-renders the members page to notFound (the caller is no longer a member), unmounting LeaveButton in the same commit that delivers the result — the effect never runs and the user strands on 'This group isn't available' with the Undo notice unreachable. Severity reassessed from QA's minor to moderate: the membership write is correct and nothing is lost, but the only Undo affordance for a reversible action is unreachable from the members page, which is where a member leaves.",
-    "tests": [
-      {
-        "action": "edit",
-        "cases": [
-          "A duplicate join insert carrying the new ON CONFLICT predicate against an existing active membership returns zero rows and raises nothing, proving the conflict target matches members_group_user_active_idx (a mismatched predicate raises instead of returning empty).",
-          "The existing sequential double-confirm no-op case and the racing-confirms ok/ok case keep passing unchanged with one row and one member.joined entry."
-        ],
-        "path": "tests/integration/invites.test.ts"
-      },
-      {
-        "action": "create",
-        "cases": [
-          "Leave confirmed and the component unmounted before the action resolves still pushes /?left=<groupId> to the router; this fails on the old effect-based navigation and passes on the continuation.",
-          "A refused leave (ok:false with a formError) pushes nothing and renders the sentence in place.",
-          "A successful removal pushes nothing and stays on the page, guarding the shared hook's other caller."
-        ],
-        "path": "tests/components/member-actions.test.tsx"
-      }
-    ],
-    "understanding": "Follow-ups from #5/PR #22, one ticket for two unrelated defects: (1) concurrent same-user group joins can 500 on Neon because joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS without ON CONFLICT, so the loser of a truly overlapping pair hits the partial unique index instead of the graceful no-op; (2) leaving a group from the members page strands the member on the not-found members page instead of home with the 'You left <group> · Undo' notice, because revalidatePath unmounts LeaveButton before its state.ok effect can navigate. Both reproduce in the code as it stands; neither was fixed by a later round.",
-    "unknowns": [
-      "Whether QA can stage two truly overlapping join transactions against a Neon-backed preview to prove the race end-to-end."
-    ],
-    "version": 1
-  },
-  "approved_too_high": false
+  "approved_too_high": false,
+  "work_order_version": 1,
+  "work_order_posted_at": "2026-10-02T19:05:06.361Z",
+  "work_order_from": "plan",
+  "work_order_comment": "5959489412"
 }
