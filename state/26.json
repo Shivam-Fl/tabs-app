@@ -1,7 +1,7 @@
 {
   "issue": 26,
   "pr": null,
-  "state": "planning",
+  "state": "done",
   "owner": "planner",
   "lock_expires": "2026-10-03T06:06:37.409Z",
   "lock_run": "37058427404",
@@ -16,7 +16,6 @@
     "n": 1,
     "run": "37058427404"
   },
-  "halted": null,
   "pending": null,
   "work_order": null,
   "touch_paths": [],
@@ -30,7 +29,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-02T19:54:21.005Z",
-  "updated_at": "2026-10-02T20:06:37.409Z",
+  "updated_at": "2026-10-02T20:09:07.396Z",
   "history": [
     {
       "at": "2026-10-02T19:54:39.480Z",
@@ -51,6 +50,11 @@
       "at": "2026-10-02T20:06:37.409Z",
       "agent": "planner",
       "action": "lock acquired"
+    },
+    {
+      "at": "2026-10-02T20:09:07.397Z",
+      "agent": "plan",
+      "action": "-> done (reconciled from planning: already done on the default branch)"
     }
   ],
   "resume_at": null,
