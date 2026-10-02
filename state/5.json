@@ -414,5 +414,262 @@
       "Exact invite URL length expectations of QA (token entropy fixed by existing newInviteToken)."
     ],
     "version": 3
-  }
+  },
+  "approved_work_order": {
+    "acceptance": [
+      {
+        "check": "Members screen shows the group's invite link with Copy link as the primary action; rotate (make a new link) and disable (turn off) controls render only for the owner and are absent for a plain member.",
+        "how_to_verify": "Sign in as owner: invite URL contains the token, Copy confirms in place. Sign in as member: link visible, rotate/disable absent.",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "Opening the invite link as a signed-in non-member shows a write-free confirm screen (so prefetch never joins); confirming joins them and lands on the group overview; confirming again leaves exactly one active membership; concurrent double-confirms yield one row; a GET-only fetch creates no row.",
+        "how_to_verify": "Integration test confirms twice plus concurrent confirms, asserts one active member row and second call is a no-op, and asserts a GET without POST writes nothing; QA opens link, confirms, lands on overview.",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "check": "After rotation the old token is rejected and the new token joins; after disable the token is rejected; a malformed token 404s without a query; a stale confirm POST after rotation is refused without a 500; a signed-out GET redirects to /sign-in carrying ?next=/join/<token>, honored through both sign-in and create-account; evil next values fall back to '/'.",
+        "how_to_verify": "Integration tests for rotate/disabled/malformed/stale-confirm states and evil-next fallback; QA drives signed-out open via both forms and lands on the join screen.",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "Owner adds a placeholder by name (trimmed, 1-80 chars; blank/overlong refused); the name appears in the member list marked as placeholder with a Claim action; readMembers returns the placeholder row so the piece-4 pickers can consume it (picker rendering itself lands with piece 4, which owns the only picker).",
+        "how_to_verify": "Call add-placeholder action, assert member list contains the name with placeholder marker and Claim control; integration test asserts readMembers returns the stored name; component test asserts the marker.",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "A signed-in member who joined through the link claims a placeholder by merge: their own row is ended and their user_id attaches to the placeholder row in one transaction, leaving exactly one active row, so everything recorded against it reads as theirs; claiming an already-claimed placeholder is refused already-claimed; a removed placeholder reports no-longer-available; an owner claim is refused (it would orphan ownership).",
+        "how_to_verify": "Integration test joins then claims, asserts one active row and reattributed records; re-claim as second user refused with row unchanged; removed placeholder distinct message; owner claim refused; QA claims in browser.",
+        "id": "AC-5",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "check": "Two concurrent claims on the same placeholder produce exactly one winner: one succeeds, the other is told it is already claimed and keeps their own membership untouched; nothing in any claim path 500s.",
+        "how_to_verify": "Integration test firing two concurrent claim transactions asserts one success, one conflict, winner owns the row, loser still has exactly their original active row.",
+        "id": "AC-6",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "Join, placeholder add, claim, rotate and disable each write exactly one activity entry naming the actor in the same transaction as the change; a failed feed write rolls the change back.",
+        "how_to_verify": "Integration test asserts one entry per mutation with actor and member linkage, and feed-mock failure leaves rows unchanged.",
+        "id": "AC-7",
+        "source": "IAC-7",
+        "verify": "test"
+      },
+      {
+        "check": "Invite block renders a static skeleton while loading (token never flashes as missing) and the copy action confirms in place with a fallback when clipboard is unavailable.",
+        "how_to_verify": "QA throttles load, asserts skeleton shape then link; clicks Copy and asserts in-place confirmation text.",
+        "id": "AC-8",
+        "source": "IAC-8",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Separate invite_tokens table with one row per rotation instead of invite_token/invite_enabled columns on groups.",
+        "rejected_because": "The product needs exactly one live token per group with immediate invalidation; a history table adds a second source for which token works and a join on every open, for audit value nothing reads."
+      },
+      {
+        "approach": "Claim by inserting a new member row for the claimer and repointing expense_payer/expense_share rows to it.",
+        "rejected_because": "Repointing rewrites ledger history and risks partial moves; attaching user_id to the same row reattributes everything by construction with one guarded UPDATE."
+      },
+      {
+        "approach": "Join via a POST-only Server Action with no GET route, or a join page inside the (app) group relying on requireUser().",
+        "rejected_because": "IAC-2/IAC-3 require a shareable screen a signed-out person can open and be redirected from with the destination carried; no GET route has no URL to share, and inside (app) requireUser() redirects to bare /sign-in losing the destination."
+      },
+      {
+        "approach": "Claim surfaced on the join screen for signed-in non-members instead of merging on the members screen.",
+        "rejected_because": "IAC-4 places the Claim action on the member-list placeholder row, a member-only surface; a join-screen claim would leak placeholder names to any bearer holder and duplicate the action on two surfaces."
+      }
+    ],
+    "approach": "Build invites/placeholders on the existing groups.invite_token/invite_enabled columns and nullable members.user_id with its partial unique index. Add one nullable members.display_name column used ONLY for unclaimed placeholders; reads coalesce users.displayName ?? members.display_name (live profile first). Join is an insert-select with NOT EXISTS guards decided by bare .returning() length plus same-transaction classification reads. Claim is a member-only merge in one ordered transaction: refuse owners outright; otherwise end the caller's own row first, then run the guarded attach UPDATE (WHERE user_id IS NULL); if the attach affects zero rows, restore the caller's row in the same transaction and return the typed refusal. GET /join/[token] lives OUTSIDE (app), is write-free, and the confirm is a POST Server Action; sign-in AND sign-up honor a validated next (leading single slash only). The token-keyed read returns only { id, name } for a live token. The invite block is fed by a member-scoped readInviteForMember, never by widening GroupRow. All writes go through src/lib/access.ts from Zod-validated Server Actions in one transaction with exactly one recordActivity; group.invite_* join GROUP_LIFECYCLE_KINDS. No money code touched per the binding keep-everything-else decision.",
+    "assumptions": [
+      "The join URL shape /join/[token] is free to choose; no existing link format or test pins it.",
+      "New activity kinds are acceptable additions; activity.kind is free text with no DB check constraint.",
+      "Claiming is how a joined member takes a placeholder: a non-owner member merges; an owner claim is refused; a non-member cannot claim without joining first.",
+      "Claim keeps the placeholder stored name in place; claimed rows resolve the live profile name because the coalesce reads users.displayName first.",
+      "The balance precondition from piece 2 does not yet exist as code, so this plan does not enforce it on remove/leave paths."
+    ],
+    "confidence": 74,
+    "confidence_rationale": "The critique's code citations re-verified: member-only members page, bare auth cross-links, hardcoded redirectTo, union-driver returning pitfall, and both brittle fixtures are all as claimed, and the merge-design resolves the blocking contradiction with an ordering reasoned from Postgres uniqueness and the partial-index predicates. Points off because that ordering and the concurrent loser-restore path are reasoned, not integration-proven; PGlite-vs-Neon concurrency fidelity is unknown; archived-group join semantics remain unspecified.",
+    "debate_summary": "Accepted eight of the ten findings and folded them in. Dismissed two: the IAC-2 confirm-screen objection (real deviation but deliberate, stated prefetch-safe engineering) and the empty-state displacement worry (member.joined already displaces Nothing here yet on every first join: existing behavior, not a regression). Neither proposal nor critique specified workable claim semantics, so the merge is the arbiter's own synthesis.",
+    "evidence": [
+      "src/db/migrate.ts:39-58 loadMigrations reads drizzle/meta/_journal.json and ignores .sql files it does not name",
+      "src/db/schema.ts:106-108 members_group_user_active_idx partial unique index",
+      "src/db/client.ts:90-95 insertUser narrows the driver union because .returning(fields) does not typecheck on it",
+      "src/app/(app)/groups/[id]/members/page.tsx:20-30 requireUser plus triple-null notFound",
+      "src/lib/auth.ts:276-280 requireUser redirects to bare /sign-in",
+      "src/app/actions/auth.ts:153,202 signUp/signIn hardcode redirectTo '/'",
+      "src/components/auth-form.tsx:104,111 bare cross-links drop the query string",
+      "tests/components/group-screens.test.tsx:14-18 vi.mock exports only three actions"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add nullable members.display_name column (placeholder name only); extend activityKinds with member.placeholder_added, member.claimed, group.invite_rotated, group.invite_disabled.",
+        "path": "src/db/schema.ts"
+      },
+      {
+        "action": "create",
+        "change": "Migration 0002: ALTER TABLE members ADD COLUMN display_name text (nullable, no backfill, no default).",
+        "path": "drizzle/0002_placeholder_display_name.sql"
+      },
+      {
+        "action": "edit",
+        "change": "Add the 0002 entry (idx 2, tag 0002_placeholder_display_name) so loadMigrations applies it.",
+        "path": "drizzle/meta/_journal.json"
+      },
+      {
+        "action": "create",
+        "change": "Regenerate via drizzle-kit to match the 0002 journal entry (members.display_name added).",
+        "path": "drizzle/meta/0002_snapshot.json"
+      },
+      {
+        "action": "edit",
+        "change": "MemberRow gains isPlaceholder; readMembers coalesces users.displayName ?? members.display_name; new readInviteForMember and minimal resolveGroupByToken; atomic join insert-select; merge-claim ordered transaction; placeholder add/rotate/disable writes; group.invite_* join GROUP_LIFECYCLE_KINDS. GroupRow unchanged.",
+        "path": "src/lib/access.ts"
+      },
+      {
+        "action": "edit",
+        "change": "Server Actions joinWithToken, addPlaceholderMember, claimPlaceholder, rotateInviteLink, setInviteEnabled with Zod validation, transactions, exactly one recordActivity each, typed refusals, revalidatePath owned here.",
+        "path": "src/app/actions/members.ts"
+      },
+      {
+        "action": "create",
+        "change": "Write-free GET join screen OUTSIDE (app) with signed-out redirect, invalid/disabled 404, member no-op notice, confirm POST button.",
+        "path": "src/app/join/[token]/page.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Accept and validate a next field (leading single slash only, else '/') in signIn/signUp and return it as redirectTo.",
+        "path": "src/app/actions/auth.ts"
+      },
+      {
+        "action": "edit",
+        "change": "Read ?next searchParam and forward to AuthForm.",
+        "path": "src/app/sign-in/page.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Read ?next searchParam and forward to AuthForm (mirrors sign-in).",
+        "path": "src/app/sign-up/page.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Accept optional next prop, render hidden next input, preserve next in both cross-links.",
+        "path": "src/components/auth-form.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Render invite block from a separate member-scoped invite prop and placeholder rows with Claim action.",
+        "path": "src/components/members-screen.tsx"
+      },
+      {
+        "action": "create",
+        "change": "Client invite-link component with clipboard fallback and in-place confirmation.",
+        "path": "src/components/invite-link.tsx"
+      },
+      {
+        "action": "create",
+        "change": "Client placeholder add form and claim button over the Server Actions.",
+        "path": "src/components/placeholder-actions.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Skeleton the invite block alongside member rows.",
+        "path": "src/app/(app)/groups/[id]/members/loading.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Extend describe() with the four new kinds.",
+        "path": "src/components/group-overview.tsx"
+      }
+    ],
+    "issue": 5,
+    "kind": "feature",
+    "out_of_scope": [
+      "Recording expenses against a placeholder (piece 4 makes it possible).",
+      "Piece-5 edit-form rule for left members.",
+      "Money core per the binding decision: split-rule storage, TR-4 balance edits, docs/* and .sdlc/* changes."
+    ],
+    "qa_script": [
+      "Seed; sign in as owner; open members screen; assert invite link with Copy primary and owner controls.",
+      "Copy link; open signed-out; assert redirect carries ?next; continue through sign-in AND create-account to the join screen.",
+      "As second user confirm join; assert overview landing; confirm again: still one membership.",
+      "Rotate: old 404s, new works; stale confirm refused; disable: token rejected.",
+      "Add placeholder; join then claim; second claim refused and loser still a member; owner claim refused.",
+      "Throttle loading; assert invite skeleton before link."
+    ],
+    "residual_risks": [
+      "PGlite concurrency may serialize what Neon interleaves; the race tests are necessary but not sufficient.",
+      "Archived-group join semantics unspecified by the issue; the plan 404s like a non-member read.",
+      "No pagination for large member lists.",
+      "Duplicate placeholder names are permitted; Claim targets row identity, never the name.",
+      "The overview shows a placeholder's stored name without a marker."
+    ],
+    "risks": [
+      "Claim race: ordered merge transaction with the partial unique index as backstop; loser keeps their membership.",
+      "Bearer token: rotation immediately invalidates old token; resolver returns only { id, name } for a live token.",
+      "Prefetch/crawler: GET is write-free; only the confirm POST writes.",
+      "Stale names: display_name stored for placeholders only; reads coalesce live users.displayName first.",
+      "Open redirect: next validated to a leading single slash; anything else falls back to '/'."
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "double-confirm and concurrent confirms yield one membership",
+          "rotate/disabled/malformed-token states; stale confirm refused without 500",
+          "signed-out redirect via sign-in and sign-up; evil next falls back",
+          "join-then-claim merges to exactly one active row",
+          "second-claim refusal; removed placeholder message; owner claim refused",
+          "concurrent claims: one winner, loser keeps membership",
+          "token read leaks only id and name",
+          "one activity entry per mutation; rollback on feed failure"
+        ],
+        "path": "tests/integration/invites.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "owner sees invite controls, member does not",
+          "placeholder marker and Claim action render",
+          "copy fallback when clipboard denied"
+        ],
+        "path": "tests/components/invite-block.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "extend fixtures with isPlaceholder and invite prop so tsc passes",
+          "extend vi.mock factory with new action names"
+        ],
+        "path": "tests/components/group-screens.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "extend MemberRow fixture with isPlaceholder so tsc passes"
+        ],
+        "path": "tests/components/group-overview-empty.test.tsx"
+      }
+    ],
+    "understanding": "Issue #5 is group invites plus pre-signup placeholders: signed-in opener joins via a rotatable/revocable bearer link (write-free GET plus confirm POST) and an owner can add account-less member rows claimed later by merge. Repo already has invite columns, the partial unique index, and the activity-in-transaction pattern; missing are the join screen, rotate/disable/add/claim writes, the placeholder name, the ?next= plumbing, and the invite UI. No money-core work per the binding decision.",
+    "unknowns": [
+      "Whether archived groups accept joins (issue silent; plan 404s like a non-member read).",
+      "Exact invite URL length expectations of QA (token entropy fixed by existing newInviteToken)."
+    ],
+    "version": 3
+  },
+  "approved_too_high": false
 }
