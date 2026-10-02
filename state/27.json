@@ -222,5 +222,14 @@
   "work_order_posted_at": "2026-10-02T20:28:16.831Z",
   "work_order_from": "plan",
   "work_order_comment": "5960934258",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "follow_ups": {
+    "review": [
+      {
+        "title": "A shares-split weight above the int8 maximum still reaches the int8 input_value column and throws uncaught (500). The PR's new bound applies only to the total, payer parts, and exact inputs; a shares count is parsed by parseDecimal (unbounded positive BigInt, signs refused) and split() refuses a shares split only when the weights sum to zero, so total '10.00' with one member's shares input of '123456789012345678901234567890' and the rest blank passes every guard, resolves to shares [1000n, 0n], passes the fieldErrors gate, and is inserted raw as inputValue into the bigint input_value column (src/db/schema.ts:251) via src/lib/access.ts:575-579.",
+        "detail": "A shares-split weight above the int8 maximum still reaches the int8 input_value column and throws uncaught (500). The PR's new bound applies only to the total, payer parts, and exact inputs; a shares count is parsed by parseDecimal (unbounded positive BigInt, signs refused) and split() refuses a shares split only when the weights sum to zero, so total '10.00' with one member's shares input of '123456789012345678901234567890' and the rest blank passes every guard, resolves to shares [1000n, 0n], passes the fieldErrors gate, and is inserted raw as inputValue into the bigint input_value column (src/db/schema.ts:251) via src/lib/access.ts:575-579.\n\n`src/app/actions/expenses.ts:270`\n\nEvidence: src/app/actions/expenses.ts (PR branch): the MAX_INT8 guard in splitInputs is gated on `splitType.data === 'exact'`; shares values flow through unchecked. src/lib/access.ts:575-579: tx.insert(expenseSplitInput).values(input.inputs.map((rule) => ({... inputValue: rule.value }))). src/lib/money.ts:280-285: shares refusal only on total===0n. Percentage inputs are provably safe (non-negative addends summing to exactly 10000n each fit), shares inputs are not.\n\nFix: Extend the MAX_INT8 bound to shares weights (e.g. refuse splitInputs values above MAX_INT8 for split type 'shares' as well, with a per-member input error), or bound all non-null splitInputs values uniformly since any value landing in input_value must fit int8."
+      }
+    ],
+    "pr": "28"
+  }
 }
