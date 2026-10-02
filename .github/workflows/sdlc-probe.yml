@@ -25,6 +25,10 @@ on:
       # `ledger` for the short task, `adtrack` for the service. The bridged models go through the
       # translator, the others straight to the gateway.
       trial: { required: false, type: string, default: '' }
+      # 'true' runs the action every stage runs, asked for its result against a framework schema
+      # (--json-schema): the path the stages' artifacts come from. Proved on the configured gateway
+      # and the first of `models` before a stage depends on it.
+      structured: { required: false, type: string, default: '' }
 
 permissions:
   contents: read
@@ -45,6 +49,7 @@ jobs:
         run: node .sdlc/bin/provider-settings.mjs
         env:
           PROBE_GATEWAY: ${{ inputs.gateway }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       - name: One request per model
         env:
           ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
@@ -99,6 +104,36 @@ jobs:
         run: |
           command -v claude >/dev/null || npm install -g --no-audit --no-fund @anthropic-ai/claude-code >/dev/null
           node .sdlc/bin/agent-trial.mjs trial.json trial-work
+      - name: The schema the structured result is held to
+        id: schema
+        if: inputs.structured == 'true'
+        run: echo "json=$(jq -c 'walk(if type == "object" then del(.description, .examples, ."$comment") else . end)' .sdlc/schemas/stop.json)" >> "$GITHUB_OUTPUT"
+      - name: A structured result through the action every stage runs
+        id: structured
+        if: inputs.structured == 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        uses: anthropics/claude-code-action@3b8197d3d486006dd4af54613517f21ac6ac625e   # v1
+        env:
+          ANTHROPIC_BASE_URL: ${{ steps.prov.outputs.base_url }}
+          ANTHROPIC_CUSTOM_HEADERS: ${{ steps.prov.outputs.headers }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          settings: ${{ steps.prov.outputs.settings }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          allowed_bots: "github-actions"
+          claude_args: --model ${{ inputs.models }} --allowedTools Bash,Read --json-schema '${{ steps.schema.outputs.json }}'
+          prompt: |
+            Count the files under .sdlc/schemas with Bash. Then answer as a stop: kind
+            "needs-decision", and a reason that names how many schema files there are.
+      - name: What the structured result was
+        if: inputs.structured == 'true'
+        env:
+          OUT: ${{ steps.structured.outputs.structured_output }}
+        run: |
+          echo "outcome: ${{ steps.structured.outcome }}"
+          echo "structured_output: $OUT"
+          printf '%s' "$OUT" | jq -e '.kind == "needs-decision" and (.reason | length) >= 10' >/dev/null && echo "STRUCTURED OK" || { echo "::error::no valid structured result"; exit 1; }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with:
           name: sdlc-probe
