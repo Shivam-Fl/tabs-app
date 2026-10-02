@@ -701,7 +701,14 @@
   "on_complete": "merge",
   "artifacts": {},
   "failure_history": [],
-  "review_history": [],
+  "review_history": [
+    {
+      "criteria": [
+        "ac-3"
+      ],
+      "head": "17bd4eee435d1bb4a56673569e2224af77139672"
+    }
+  ],
   "review_root_caused": [],
   "created_at": "2026-10-01T22:23:09.497Z",
   "updated_at": "2026-10-02T00:11:00.321Z",
