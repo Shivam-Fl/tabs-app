@@ -170,7 +170,12 @@
     ],
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "tests/components/ui.test.tsx",
+    "src/components/ui/top-bar.tsx",
+    "src/components/shell.tsx",
+    "tests/components/ui.test.tsx"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
