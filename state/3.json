@@ -576,7 +576,7 @@
   "work_order_posted_at": "2026-10-02T05:13:23.207Z",
   "work_order_from": "root-cause",
   "work_order_comment": "5946005069",
-  "implemented_version": 2,
+  "implemented_version": 3,
   "follow_ups": {
     "review": [
       {
