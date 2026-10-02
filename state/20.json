@@ -69,5 +69,160 @@
     "decided_at": "2026-10-02T16:22:55.340Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "formatMinor renders sub-unit negatives with the locale minus sign (formatMinor(-5n,'EUR') === '-€0.05', and formatMinor(-5n,'BHD') carries the formatter minus and ends with '0.005') while every existing rendering is byte-identical",
+        "how_to_verify": "vitest run tests/lib/money.test.ts",
+        "id": "AC-1",
+        "source": "TR-23",
+        "verify": "test"
+      },
+      {
+        "check": "readMembers returns null for a non-member and the owner-first active list for a member, with the membership authorisation carried inside the fetching query",
+        "how_to_verify": "vitest run tests/integration/groups.test.ts tests/integration/members.test.ts",
+        "id": "AC-2",
+        "source": "TR-1",
+        "verify": "test"
+      },
+      {
+        "check": "After removing a member, the row disappears without a manual reload and an in-place 'Removed <name>.' confirmation is inserted in a live region and announced; the row's disappearance is the durable signal and no live Remove button remains",
+        "how_to_verify": "Seed, sign in as the owner, open the members page, remove a member, observe the row disappear with confirmation and no reload",
+        "id": "AC-3",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "After renaming a group, the members back-link and the group-name paragraph show the new name without a manual reload, alongside the 'Saved.' message",
+        "how_to_verify": "Seed, sign in as the owner, rename the group on the members page, observe the surrounding server-rendered name update with no reload",
+        "id": "AC-4",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "After navigating home following a rename, the home row shows the new name with no manual reload",
+        "how_to_verify": "Seed, sign in as the owner, rename the group on the members page, navigate home, observe the home row shows the new name with no reload",
+        "id": "AC-5",
+        "source": "TR-13",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Fix formatMinor by formatting the signed whole part but special-casing whole === 0n to prefix a hardcoded '-'",
+        "rejected_because": "A hardcoded hyphen can disagree with the locale minus sign; deriving the minus part from the same pinned formatter is equally short and cannot disagree."
+      },
+      {
+        "approach": "Fix readMembers with an aliased self-join of the members table (one alias for authorisation, one for the listing)",
+        "rejected_because": "Drizzle aliases for a self-join add import and naming surface for one call site; the existing memberOfGroup EXISTS predicate already expresses exactly this authorisation and is already used for the write path, so reusing it keeps one spelling of the rule."
+      },
+      {
+        "approach": "Fix RemoveButton by navigating away (router.push) like LeaveButton instead of refreshing in place",
+        "rejected_because": "The removal happened on this screen and the viewer stays a member; navigating away destroys the context the confirmation belongs in, while router.refresh() re-renders the list that must change, mirroring ArchiveButton."
+      }
+    ],
+    "approach": "Fix the four product defects in place with the smallest change that removes each root cause, and add regression tests at the level that can see each defect. formatMinor carries the sign outside the whole part: format the absolute whole through Intl, substitute the fraction, then prepend the formatter's own minus part when the input was negative. readMembers becomes one query: the member-list SELECT constrained by the existing memberOfGroup EXISTS predicate, returning null when it yields no rows. RemoveButton gains useRouter and mirrors ArchiveButton: on state.ok it calls router.refresh() and renders an in-place 'Removed <name>.' status with the button disabled — inserted (and announced) before the async refresh lands, with the row's disappearance as the durable signal. RenameGroupForm gains useRouter and calls router.refresh() when state.ok arrives so the surrounding server components re-render, keeping the existing field-sync and focus effects untouched. The refreshes are progressive enhancement only: both confirms are real form submits, so the no-JS path still works through the Server Action's own re-render. The archive-button planning gap is not a code change, and the SettingsForm instance of the same revalidate-without-refresh shape is deferred as its own ticket rather than fixed here.",
+    "assumptions": [
+      "Intl en-US currency formatToParts of a negative value carries a 'minusSign' part ('-' prefix for EUR, JPY, BHD and INR — executed during planning); the fix reads that part from the same formatter and falls back to '-'.",
+      "router.refresh() re-renders the members page server components after revalidatePath('/', 'layout'), as ArchiveButton and LeaveNotice already rely on.",
+      "A member's own active row is returned by the constrained list query, so an empty result means the caller is not a member; the owner-cannot-leave and never-delete-rows invariants keep every group non-empty.",
+      "No call site depends on formatMinor dropping the sign for sub-unit negatives; all current call sites format literal 0n balances in this piece.",
+      "Component tests run against a hoisted shared router mock so refresh/push assertions observe the same fns the components called."
+    ],
+    "confidence": 78,
+    "confidence_rationale": "The money root cause was executed, not just read: the current algorithm's before-table (-5n EUR->'€0.05', -5n BHD->'BHD 0.005' with no minus) and the Intl minusSign probes for four currencies confirm both the defect and the fix's minus source. The other three defects were verified at their exact lines and each fix follows an in-repo precedent (ArchiveButton refresh, memberOfGroup predicate). What would move the number up is browser QA confirming the inserted removal status is announced before the refresh unmounts the row; what would move it down is a currency whose en-US minus layout is not a simple prefix, or a Drizzle type rejection of the EXISTS predicate in the SELECT where clause.",
+    "debate_summary": "The critique changed the plan in five places and was overruled in two. Accepted: AC-2 restated as the observable behaviour (the 'single query' clause is not observable through the named integration tests, and TR-1's own proof is behavioural); AC-4 split into a members-page check and a home-after-navigation check; the router mock fixed with hoisted shared spies (the current mock mints a fresh vi.fn() per useRouter() call, so the planned refresh assertions could never pass); the empty-means-non-member assumption restated around the caller's own row rather than the owner row; reproduced set to true with an executed before-table and a BHD sub-unit case added (the JPY case guards only the whole-yen path the current code already handles). Rejected with reasons: (1) the demand for a list-level live region surviving the refresh — the unmount fact is correct, but the status insertion commits before the async refresh lands so it is still announced, the row's disappearance is the durable signal per the ui.md update-in-place pattern, and lifting confirmation state above the list is a rebuild disproportionate to this ticket, so the plan keeps the row-internal status, asserts its insertion in tests, and records the transience as a residual risk; (2) fixing SettingsForm here — the same-shape diagnosis is correct (verified: no useRouter, revalidate layout, server-read TopBar name), but it is a sixth finding outside the issue's five with TR-12 absent from acceptance, and per the ship-on-its-own test it is deferred in out_of_scope as its own ticket rather than widening this one.",
+    "evidence": [
+      "Executed current algorithm in node: -5n EUR->'€0.05', -1n->'€0.01', -99n->'€0.99', -100n->'-€1.00', -1234n->'-€12.34', -5n BHD->'BHD 0.005' (no minus), -5n JPY->'-¥5' — confirms the sub-unit sign drop and that JPY negatives already work.",
+      "Executed Intl probes: formatToParts(-5n) carries minusSign:'-' as a prefix for EUR/JPY/BHD/INR en-US while formatToParts(0n) carries none — confirms the root cause and the fix's minus source.",
+      "src/lib/access.ts:160-161 gates readMembers on a separate readMembership call followed by an unjoined fetch, unlike readGroup/readRecentActivity which join inside the fetching query.",
+      "src/components/member-actions.tsx:82 passes an empty onSuccess and RemoveButton holds no router, unlike LeaveButton (router.push) and ArchiveButton (router.refresh).",
+      "src/components/rename-group-form.tsx has no router import and performs no refresh on state.ok, while renameGroup revalidates '/', 'layout'.",
+      "src/components/settings-form.tsx:23 has no useRouter while updateProfile revalidates '/', 'layout' (profile.ts:66) and Shell/TopBar reads displayName server-side — same shape, deferred as its own ticket.",
+      "tests/components/group-screens.test.tsx:24-26 useRouter returns fresh vi.fn() per call, so the planned refresh assertions need hoisted shared spies.",
+      "members-screen.tsx:44-71 renders RemoveButton inside <li key={memberId}> that the refresh removes; archive-button.tsx:18-32 refreshes without unmounting since its button persists."
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Carry the sign outside the whole part: compute whole from the absolute value, render through formatToParts with the fraction substituted as today, and when the input was negative prepend the minus-sign part read from the same pinned formatter (probe formatToParts of a negative value; fallback '-'). Verified '-' prefix for EUR/JPY/BHD/INR en-US during planning. No other behaviour changes, including the zero-fraction-digit (JPY) path.",
+        "path": "src/lib/money.ts",
+        "why": "Root cause of the dropped minus sign for sub-unit negatives (TR-23)."
+      },
+      {
+        "action": "edit",
+        "change": "Replace the readMembership-then-fetch two-step with a single SELECT of the active member list constrained by the existing memberOfGroup(groupId, userId) EXISTS predicate; return null when it yields no rows (a member's own active row is returned by the same query, so empty means non-member), otherwise the same owner-first mapping. Update the doc comment to state the authorisation is inside the fetching query.",
+        "path": "src/lib/access.ts",
+        "why": "Makes readMembers satisfy the module's TR-1 contract that no function takes a group id and returns data without the membership join in the query."
+      },
+      {
+        "action": "edit",
+        "change": "Add useRouter; on state.ok call router.refresh() and render an in-place 'Removed <name>.' role=status confirmation with the Remove button disabled, mirroring ArchiveButton's refresh-on-success pattern. The status is inserted (and announced) before the async refresh lands; the refreshed list removing the row is the durable signal. Keep the dialog, consequence wording and error rendering unchanged; the no-JS path still works through the Server Action's own re-render since the confirm is a real form submit.",
+        "path": "src/components/member-actions.tsx",
+        "why": "Stale member row with a live Remove button after a successful removal."
+      },
+      {
+        "action": "edit",
+        "change": "Add useRouter and a state.ok effect calling router.refresh() so the server-rendered name around the form re-renders; keep the Saved. message, the initialName sync effect and the invalid-field focus effect unchanged.",
+        "path": "src/components/rename-group-form.tsx",
+        "why": "Surrounding server components keep the old name after a successful rename until manual reload."
+      }
+    ],
+    "issue": 20,
+    "kind": "bug",
+    "out_of_scope": [
+      "src/components/archive-button.tsx: no code change. The file's absence from the previous work order's files[] was a planning-process gap, not a product defect; the component already refreshes on success, announces completion, and is covered by the existing 'announces a finished archive' component test.",
+      "src/components/settings-form.tsx: no code change here. The profile form has the same revalidate-without-refresh shape (updateProfile revalidates '/', 'layout' while the form never calls router.refresh(), so the server-read TopBar name goes stale until reload), but it is a sixth finding outside this issue's five with TR-12 absent from acceptance; it ships on its own and is deferred as its own ticket."
+    ],
+    "qa_script": [
+      "Seed and sign in as the group owner, then open the members page.",
+      "Rename the group: assert 'Saved.' appears and the members back-link and group-name paragraph show the new name with no manual reload.",
+      "Navigate home: assert the home row shows the new name with no manual reload.",
+      "Remove a non-owner member: assert the row disappears with an in-place confirmation and no manual reload, and no stale Remove button remains.",
+      "Sub-unit negative amounts have no rendered surface yet (all member balances are literal 0n in this piece), so the minus-sign fix is covered by unit tests, not by browser observation."
+    ],
+    "reproduced": true,
+    "residual_risks": [
+      "RemoveButton confirmation is transient by design: the refreshed list unmounts the row, so a screen reader that has not yet announced the inserted status loses it; the row's disappearance is the durable signal. A persistent list-level live region was judged disproportionate for this ticket.",
+      "Remove and rename refresh only the current tab; a stale row in another tab still submits and surfaces the action's formError ('That member could not be removed.').",
+      "If the post-remove refresh itself fails, the 'Removed <name>.' status shows while the stale row remains with its button disabled and no retry; a manual reload recovers."
+    ],
+    "risks": [
+      "The readMembers rewrite reuses the memberOfGroup SQL predicate in a SELECT where clause; if the Drizzle union Session type rejects it there, fall back to an aliased self-join and keep the single-round-trip property.",
+      "RenameGroupForm's refresh delivers a new initialName through the existing sync effect, which overwrites in-progress typing raced between submit and refresh landing; the success path (typed name equals new name) is unaffected.",
+      "A refresh that lands after a concurrent archive or membership change can render notFound; same exposure as the existing ArchiveButton refresh.",
+      "readMembers' 'empty implies null' rule couples the members page 404 to the never-empty-group invariant; a future zero-member group would 404 a genuine member instead of showing an empty list.",
+      "formatMinor now emits a minus for every negative; docs/ui.md requires the direction as a word ('You owe ₹180.50', never '₹-180.50'), so any later caller passing a signed balance must pair it with direction words, never a bare signed figure."
+    ],
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "formatMinor(-5n,'EUR') === '-€0.05', plus -1n and -99n sub-unit negatives",
+          "negative sub-unit three-fraction-digit amount (formatMinor(-5n,'BHD') carries the formatter minus and ends with '0.005')",
+          "negative zero-fraction-digit amount (formatMinor(-5n,'JPY') === '-¥5') guards the whole-yen path",
+          "existing positive/negative/zero/large-amount cases unchanged"
+        ],
+        "path": "tests/lib/money.test.ts"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "next/navigation mock uses vi.hoisted shared push/refresh spies so assertions observe the same fns the components called",
+          "RemoveButton: mocked removeMember resolving ok asserts router.refresh called via the shared spy, 'Removed <name>.' inserted with role=status, and no live Remove button remains",
+          "RenameGroupForm: mocked renameGroup resolving ok asserts router.refresh called via the shared spy alongside 'Saved.'"
+        ],
+        "path": "tests/components/group-screens.test.tsx"
+      }
+    ],
+    "understanding": "Issue #20 collects five non-blocking review findings from PR #19 (for #4): (1) formatMinor drops the minus sign for sub-unit negatives; (2) readMembers authorises via a separate check-then-fetch instead of a membership join inside the fetching query; (3) RemoveButton leaves a stale row with a live button after success; (4) RenameGroupForm leaves stale server-rendered names after success; (5) archive-button.tsx shipped without appearing in the work order files[]. Findings 1-4 reproduce exactly as described — the money defect was additionally executed in node during planning — and finding 5 is a planning-process gap whose component is already behaviourally correct and tested, so it needs no code change.",
+    "unknowns": [
+      "Whether any supported currency's en-US formatToParts places the minus other than as a simple prefix; mitigated by reading the minus part from the formatter rather than hardcoding position."
+    ],
+    "version": 2
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T16:34:50.538Z",
+  "validated_ac_changes": []
 }
