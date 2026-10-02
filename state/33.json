@@ -105,7 +105,10 @@
     "understanding": "Issue #33 carries two review findings from PR #29: (1) a shares-split input has no int8 bound, so a count above 9223372036854775807 passes validation and explodes at the insert with a 500 instead of a field sentence — still true in src/app/actions/expenses.ts:304, which bounds only exact inputs; (2) tests/lib/money.test.ts gained benign unit coverage outside the work-order lists — still true, and needs no code change. This plan fixes (1) with the mirrored bound the review prescribes and drops (2) as recorded-but-benign.",
     "version": 1
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/app/actions/expenses.ts",
+    "tests/integration/expenses.test.ts"
+  ],
   "acceptance": [],
   "planned_route": [
     "debug",
