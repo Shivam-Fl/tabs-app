@@ -23,9 +23,9 @@
     "requested_at_head": null,
     "qa_run": "37007937278",
     "from": "qa",
-    "pr": "18",
+    "pr": 18,
     "work_order_version": 1,
-    "at": "2026-10-02T13:20:28.969Z"
+    "at": "2026-10-02T14:07:11.223Z"
   },
   "work_order": {
     "issue": 17,
@@ -348,7 +348,7 @@
     "decided_at": "2026-10-02T09:46:14.826Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan",
+  "dispatched_stage": "root-cause",
   "validated_from": "root-cause",
   "validated_at": "2026-10-02T13:40:11.500Z",
   "validated_ac_changes": [
