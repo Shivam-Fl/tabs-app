@@ -68,5 +68,84 @@
     "decided_at": "2026-10-02T21:24:21.430Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "debug"
+  "dispatched_stage": "debug",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "On the new-expense form for a group, with total 10.00 and split type Shares, entering 123456789012345678901234567890 as one member's shares and submitting shows an error beside that member's Shares field, shows no 500 error page, and the group's expense list is unchanged.",
+        "how_to_verify": "Seed, sign in, open a group with two members, create an expense with amount 10.00 and split Shares, type the huge shares value for the first member, submit, and read the field error and the expense list.",
+        "id": "AC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "A shares weight of exactly 9223372036854775807 is accepted and stored exactly in expense_split_input.input_value.",
+        "how_to_verify": "Run the new integration case 'accepts a shares weight of exactly the int8 maximum' in tests/integration/expenses.test.ts via vitest.",
+        "id": "AC-2",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Widen expense_split_input.input_value from bigint/int8 to numeric",
+        "rejected_because": "Changes the stored contract for every split type to accommodate one unvalidated input; the product bounds oversized totals, payer parts and exact inputs at the boundary already, so the consistent fix is to bound shares the same way."
+      },
+      {
+        "approach": "Add the bound inside split() in src/lib/money.ts",
+        "rejected_because": "split() is the pure divider shared with the form's live summary and knows nothing about storage column widths; the int8 bound belongs at the server-action boundary with the other three MAX_INT8 checks."
+      }
+    ],
+    "approach": "In createExpense (src/app/actions/expenses.ts:263-278) remove the `splitType.data === 'exact'` gate on the MAX_INT8 check so every parsed per-member split input above 9223372036854775807n is refused beside that member's field with value zeroed (0n), exactly as the exact branch already does. Exact keeps its existing sentence 'That amount is too large to record.' so the current AC-3 test is untouched; shares/percentage use 'That number is too large to record.'. Update the stale comment on lines 270-272 that claims only exact inputs land in input_value. Percentage inputs can never pass the sum-to-10000 check while exceeding int8, so the uniform guard changes no successful percentage write; it only turns an absurd percentage into a per-field error instead of a split-mismatch error, and both refuse with nothing written.",
+    "confidence": 90,
+    "confidence_rationale": "The defect is a single missing bound on one line, traced from parse through split() to the insert; the fix mirrors the three existing MAX_INT8 guards and the existing test file already has the harness (recordAs, rowCounts, groupWithThree) for the new cases.",
+    "evidence": [
+      "src/app/actions/expenses.ts:273: MAX_INT8 guard gated on splitType.data === 'exact'; shares values flow through unchecked",
+      "src/lib/money.ts:280-282: shares refusal only on total===0n",
+      "src/lib/access.ts:574-576: splitInputs values inserted raw as inputValue into expense_split_input",
+      "src/db/schema.ts:251: inputValue is bigint (int8)",
+      "src/components/expense-form.tsx:464-481: form renders input.<memberId> fields for non-equal splits with per-field errors"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "In the splitInputs mapping (lines 263-278), drop the `splitType.data === 'exact'` gate so any parsed member input with value > MAX_INT8 is refused beside that member's field (`fieldErrors[`input.${memberId}`] ??= ...`, returning value 0n): exact keeps 'That amount is too large to record.', shares/percentage use 'That number is too large to record.'. Rewrite the comment on lines 270-272 to state that every non-null split input lands in the int8 input_value column, so every one carries the bound.",
+        "path": "src/app/actions/expenses.ts",
+        "why": "This is the one path by which an oversized shares weight reaches the int8 input_value column and throws uncaught (500)."
+      }
+    ],
+    "issue": 30,
+    "kind": "bug",
+    "out_of_scope": [
+      "Client-side pre-validation of shares magnitude in expense-form.tsx: the server refusal beside the field is the fix; live-summary hardening would ship on its own.",
+      "Widening the input_value column type: the product bounds all other money-adjacent inputs instead.",
+      "Percentage inputs beyond int8 as a separate ticket: provably unreachable past the sum-to-10000 check, covered here only as defense-in-depth by the uniform guard."
+    ],
+    "qa_script": [
+      "Seed and sign in as a group owner with two members.",
+      "Create an expense: amount 10.00, split type Shares, first member shares 123456789012345678901234567890, rest blank.",
+      "Submit and confirm a per-member error beside that member's Shares field, no 500, and no new expense in the list.",
+      "Repeat with shares 1 and 2 and confirm the expense records.",
+      "Run vitest on tests/integration/expenses.test.ts for the two new cases."
+    ],
+    "reproduced": true,
+    "risks": [
+      "Touches the expense write path shared by all four split types; a mistake in the guard condition could refuse valid splits. The new integration cases plus the existing exact/payer/amount cases cover each branch.",
+      "Absurd percentage inputs now get a per-field error instead of the split-mismatch sentence; both refuse with nothing written, but the copy differs."
+    ],
+    "root_cause": "The MAX_INT8 guard added for #27 in createExpense applies only to the total, payer parts, and exact-type split inputs (src/app/actions/expenses.ts:273). A shares weight is parsed by unbounded parseDecimal, passes the shares-sum-zero check in split(), passes the fieldErrors gate, and is inserted raw as inputValue into the int8 expense_split_input.input_value column, where Postgres raises out-of-range and the form sees an uncaught 500.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "refuses a shares weight above the int8 maximum beside that member's field, writing no expense, payer, share, input, or activity rows (mirrors the existing exact AC-3 case: total '10', splitType 'shares', one huge weight, rest blank)",
+          "accepts a shares weight of exactly the int8 maximum (9223372036854775807) and stores it exactly in expense_split_input.input_value (mirrors the existing at-max AC-4 case)"
+        ],
+        "path": "tests/integration/expenses.test.ts"
+      }
+    ],
+    "understanding": "Issue #30 is the single surviving review finding from PR #28 (for #27): a shares-split weight above the int8 maximum (e.g. total '10.00' with one member's shares input '123456789012345678901234567890') passes every guard in createExpense, resolves via split() to shares [1000n, 0n], passes the fieldErrors gate, and is inserted raw as inputValue into the int8 expense_split_input.input_value column (src/db/schema.ts:251 via src/lib/access.ts:574-576), throwing uncaught out-of-range (500) instead of a per-field sentence. Percentage inputs are provably safe (non-negative addends summing to exactly 10000n each fit int8); shares inputs are not. I traced the path in the current code and it still reproduces: the MAX_INT8 guard at src/app/actions/expenses.ts:273 is still gated on splitType.data === 'exact'.",
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T21:27:47.253Z",
+  "validated_ac_changes": []
 }
