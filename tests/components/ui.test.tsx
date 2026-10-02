@@ -291,9 +291,15 @@ describe('the touch-target markup, which jsdom cannot measure', () => {
   it('a one-word display name is truncated, not capped, and the name is the only item that shrinks', () => {
     render(
       <Shell user={{ displayName: 'Wolfeschlegelsteinhausenbergerdorffenfun' }}>
-        <main />
+        <div />
       </Shell>,
     );
+
+    // Shell renders its own <main id="main">, so the fixture's child has to be a plain
+    // element: passing <main /> nests one landmark inside another, which React reports no
+    // warning for, so the fixture would assert a DOM shape the application cannot produce.
+    expect(document.querySelectorAll('main')).toHaveLength(1);
+    expect(document.querySelectorAll('main main')).toHaveLength(0);
 
     // Shell, not TopBar alone: the sign-out form the last assertion looks for lives in
     // shell.tsx, and one composition covers all five.
@@ -303,8 +309,14 @@ describe('the touch-target markup, which jsdom cannot measure', () => {
     // applies at every viewport rather than only where the bar is tight. Nothing measures
     // that here — AC-15 does, in a browser — but the ceiling is a class name, and jsdom can
     // see a class name, so this is the permanent guard against one coming back.
+    //
+    // The match is on the opening bracket alone, not on a bracket followed by a digit. Every
+    // arbitrary-value Tailwind max-width carries that bracket, so requiring a digit was a
+    // narrowing that let max-w-[--cap], max-w-[calc(100%-2rem)] and max-w-[var(--x)] through —
+    // the spellings a ceiling actually takes when it is written in terms of a token. The
+    // digit-valued spellings were already caught and are not what this guard demonstrates.
     const nameLink = screen.getByRole('link', { name: 'Wolfeschlegelsteinhausenbergerdorffenfun' });
-    expect(nameLink.className).not.toMatch(/max-w-\[\d/);
+    expect(nameLink.className).not.toMatch(/max-w-\[/);
 
     // The ellipsis still has to be reachable when there genuinely is no room: the span is
     // what makes it render, because text-overflow does not reliably apply to a flex
@@ -320,5 +332,11 @@ describe('the touch-target markup, which jsdom cannot measure', () => {
     // <button> inside it: the form is the nav's flex item.
     expect(screen.getByRole('link', { name: 'Groups' }).className).toContain('shrink-0');
     expect(document.querySelector('nav form')?.className).toContain('shrink-0');
+
+    // ...and the name is the only one allowed to give ground. shrink-0 on the name link is
+    // the class whose accidental addition reproduces the 548px horizontal overflow QA
+    // measured at 360x640, because the name is the only unbounded item in the row; with it
+    // present every other assertion in this case still passes, which is why it needs its own.
+    expect(nameLink.className).not.toContain('shrink-0');
   });
 });
