@@ -16,14 +16,15 @@
     "n": 1,
     "run": "37065804175"
   },
-  "halted": null,
   "pending": {
     "stage": "implement",
     "rework": "reserved-paths",
     "requested_at_head": "43ba267f114a210a4a5830edc88c4936651481d5",
+    "qa_run": null,
+    "from": null,
     "pr": 31,
     "work_order_version": 1,
-    "at": "2026-10-02T21:38:26.939Z"
+    "at": "2026-10-02T23:53:44.742Z"
   },
   "work_order": {
     "acceptance": [
@@ -440,7 +441,7 @@
     }
   ],
   "epic": 1,
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "feature",
     "confidence": 92,
@@ -449,7 +450,7 @@
     "councils": {},
     "decided_at": "2026-10-02T20:46:17.931Z"
   },
-  "stopped_at": "implement",
+  "stopped_at": null,
   "dispatched_stage": "implement",
   "validated_from": "plan",
   "validated_at": "2026-10-02T21:13:26.627Z",
