@@ -490,5 +490,14 @@
   "work_order_posted_at": "2026-10-02T17:41:39.056Z",
   "work_order_from": "plan",
   "work_order_comment": "5957955510",
-  "implemented_version": 1
+  "implemented_version": 1,
+  "follow_ups": {
+    "review": [
+      {
+        "title": "Concurrent same-user joins can 500 on Neon: joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS plus the partial unique index, but without ON CONFLICT the loser of a truly overlapping pair gets a unique violation instead of the graceful no-op the PGlite test proves.",
+        "detail": "Concurrent same-user joins can 500 on Neon: joinGroupIfAbsent relies on INSERT..WHERE NOT EXISTS plus the partial unique index, but without ON CONFLICT the loser of a truly overlapping pair gets a unique violation instead of the graceful no-op the PGlite test proves.\n\n`src/lib/access.ts:526`\n\nEvidence: src/lib/access.ts:526-534 INSERT..SELECT..WHERE NOT EXISTS with bare RETURNING; backstop is members_group_user_active_idx. Under READ COMMITTED two overlapping transactions both pass NOT EXISTS, then the second raises unique_violation when the first commits. PGlite serializes so the integration test cannot show this.\n\nFix: Add ON CONFLICT DO NOTHING (conflict target (group_id, user_id) with the partial-index predicate) and keep treating empty RETURNING as the no-op path."
+      }
+    ],
+    "pr": "22"
+  }
 }
