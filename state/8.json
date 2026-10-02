@@ -72,5 +72,298 @@
     "decided_at": "2026-10-02T20:46:17.931Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "plan"
+  "dispatched_stage": "plan",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Balances screen lists every active member with a visible direction phrase and figure ('You are owed €420.00' / 'You owe €180.50' / 'Settled €0.00'), and the greedy transfer list 'A pays B €X' renders below it as the dominant block.",
+        "how_to_verify": "QA on /groups/[id]/balances with a 3-member group holding a multi-payer expense: read each row's direction words and each transfer line; component test pins the settled copy.",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "Transfers are greedy largest-creditor vs largest-debtor over net balances, reproduce the nets exactly, use at most n-1 transfers, and are byte-identical across runs; six-member fixture produces the checked-in known answer.",
+        "how_to_verify": "Run tests/lib/balances.test.ts (six-member known-answer fixture, count bound, determinism, exact-reproduction cases).",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "check": "A group with every balance zero shows \"Everyone's square in this group.\" on /groups/[id]/balances and on /groups/[id] instead of an empty transfer list; component test asserts the settled state renders.",
+        "how_to_verify": "Run tests/components/balances-screen.test.tsx; QA opens a fresh group with no expenses and the overview after settling.",
+        "id": "AC-3",
+        "source": "IAC-3",
+        "verify": "test"
+      },
+      {
+        "check": "Net balances are computed from expense_payer and expense_share rows only: directly rewriting expense_split_input rows (or changing money.split/rounding) leaves every balance byte-identical.",
+        "how_to_verify": "Run tests/integration/balances.test.ts 'never reads the stored rule' case (UPDATE expense_split_input, re-read balances, assert equal) and the rounding-rule case.",
+        "id": "AC-4",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "Home shows exactly two totals at --text-2xl ('You owe' in --color-negative, 'You are owed' in --color-positive) with the per-group breakdown directly beneath each figure, across every active membership.",
+        "how_to_verify": "QA on / as a user in two groups (one debtor, one creditor): read both figures, colours, and the breakdown lines beneath each.",
+        "id": "AC-5",
+        "source": "IAC-5",
+        "verify": "browser"
+      },
+      {
+        "check": "For a user in three groups the two home totals equal the sum of the per-group nets to the minor unit, and a group the user was removed from contributes to neither total nor breakdown.",
+        "how_to_verify": "Run tests/integration/balances.test.ts three-group case (assert totals === sum of per-group nets; remove from one group at zero, assert exclusion).",
+        "id": "AC-6",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "Home withholds both totals until every group's balance resolves; a failing group renders its own inline error row with Try again while the other groups and their lines still render.",
+        "how_to_verify": "QA on / with one group forced to fail (offline row / forced error): totals absent, failing row shows inline error + Try again, rest intact.",
+        "id": "AC-7",
+        "source": "IAC-7",
+        "verify": "browser"
+      },
+      {
+        "check": "Leave and Remove at non-zero balance are refused with the on-screen sentence that the balance must be settled first; at zero both succeed exactly as today.",
+        "how_to_verify": "QA on /groups/[id]/members: attempt leave/remove while non-zero (refused, sentence visible), settle via compensating expense, retry (succeeds).",
+        "id": "AC-8",
+        "source": "IAC-8",
+        "verify": "browser"
+      },
+      {
+        "check": "Removing a member sets removed_at only: payer/share/split-input rows stay, every remaining member's balance is identical before and after, and the removed member's expenses still list with their name.",
+        "how_to_verify": "Run tests/integration/balances.test.ts removal case (snapshot balances pre/post, assert row counts in expense_payer/expense_share unchanged, readExpensesForGroup still names them).",
+        "id": "AC-9",
+        "source": "IAC-9",
+        "verify": "test"
+      },
+      {
+        "check": "At 360px the balances table is one row per member below 480px with the amount right-aligned and no horizontal scrolling; the member list and full transfer list fit the phone column without overlap.",
+        "how_to_verify": "QA at 360x740 and 1280px on /groups/[id]/balances: one row per member, right-aligned mono amounts, full transfer list reachable, no horizontal scroll.",
+        "id": "AC-10",
+        "source": "IAC-10",
+        "verify": "browser"
+      },
+      {
+        "check": "Server refuses leaveGroup and removeMember at non-zero balance inside the transaction (not just hidden buttons): direct action calls with forged FormData get a formError and write nothing.",
+        "how_to_verify": "Run tests/integration/balances.test.ts guard cases (call leaveGroup/removeMember actions at non-zero balance, assert ok:false and removed_at still null).",
+        "id": "AC-11",
+        "source": "TR-13",
+        "verify": "test"
+      },
+      {
+        "check": "simplifyDebts throws on inputs that do not sum to zero instead of rendering; pages assert the sum before calling so a programming error never becomes a user-facing 500.",
+        "how_to_verify": "Run tests/lib/balances.test.ts throw case; code review of balances page asserting sum===0n before simplifyDebts.",
+        "id": "AC-12",
+        "source": "TR-6",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Recompute shares from expense_split_input on every read instead of summing stored payer/share rows.",
+        "rejected_because": "Violates TR-4 and ADR-0011 directly: a later change to split() or the rounding rule would restate what people already owed, and the issue's Risk section names exactly this trap (one function computes shares, write path only)."
+      },
+      {
+        "approach": "Compute simplification in SQL (recursive CTE) or a database view instead of a pure function.",
+        "rejected_because": "Greedy matching needs ordering, tie-breaking and a transfer-count bound that are clearer and directly unit-testable in TypeScript; SQL would also split the money logic across two languages. Sums stay in SQL, matching stays pure (same split money.ts/split() already uses)."
+      },
+      {
+        "approach": "Store a precomputed balance column per membership, updated on each expense write.",
+        "rejected_because": "A second source of truth that can drift from the ledger; TR-4 defines the balance AS the sum of stored rows, so caching it adds invalidation bugs for zero read gain at this scale (one grouped SUM per group)."
+      }
+    ],
+    "approach": "Add a pure, dependency-free src/lib/balances.ts (netBalances over member id list + payer/share row arrays using bigint only; simplifyDebts as greedy largest-creditor vs largest-debtor with memberId tie-break, zero-sum throw, n-1 bound) and wire it through authorised reads in src/lib/access.ts, never touching expense_split_input on any read path. readMembers stops returning the 0n literal and attaches real balances from two grouped SUM queries (payers, shares, non-deleted expenses only); listGroupsForUser computes the caller's per-group net the same way so home totals are exact sums of per-group nets. New /groups/[id]/balances page asserts sum===0n then calls simplifyDebts; presentational BalancesScreen renders direction words visibly beside mono figures, the dominant transfer list, and the verbatim settled sentence. GroupOverview is extended (not replaced) with the same blocks. leaveGroup/removeMember enforce the non-zero guard inside their transactions via a new readNetBalanceForMember helper and surface the 'settle first' sentence; MembersScreen disables the controls with that sentence beside them. Home fetches per-group balances with Promise.allSettled so one failure withholds the totals but keeps the rest with an inline Try again row. No migration: expense_payer/expense_share/expense_split_input already exist (0003_expenses); no payment table exists yet (piece 7 owns TR-7), so balances sum expenses only. No doc edits: TR-4's rewrite and the split-input model already landed in docs/trd.md, project.md and schema comments; the reserved-path guard forbids touching them here.",
+    "assumptions": [
+      "No payment table exists yet, so 'net balance' in this ticket sums expenses only; payments (piece 7, TR-7) will extend readBalancesForGroup later rather than redefine it.",
+      "PGlite/Drizzle return bigint money columns as bigint (as expenses.test.ts already relies on); no Number() conversion appears on the read path.",
+      "QA/CI fixtures use a single currency per user (EUR, as all existing integration tests do); mixed-currency home totals are an explicit risk, not a second implementation in this ticket.",
+      "'Visible without scrolling' (IAC-10) is read as: no horizontal scroll at 360px with compact one-row-per-member layout; a group with dozens of members will vertically scroll, which no layout can avoid.",
+      "The Record-payment entry point has no IAC and its write belongs to piece 7, so this ticket renders it disabled with a helper sentence rather than building a form.",
+      "readMembers' canonical order (owner first, created_at, id) is stable and is the display order for balances and transfers."
+    ],
+    "confidence": 78,
+    "confidence_rationale": "Read path is new code over an already-merged expense ledger (#6) with an exact schema match; the only behavioural changes to existing flows are the leave/remove guard (additive refusal) and replacing 0n literals with sums. Main uncertainty is the home partial-failure UX shape and mixed-currency totals, both flagged rather than hidden.",
+    "debate_summary": "The critique (plan/critique.json) was empty — an empty object with no findings — so there was nothing to accept or rebut, and no finding that contradicted the binding decisions in plan/brief.md. I therefore judged the proposal directly against the code and the brief instead of splitting a difference that did not exist. I verified the load-bearing claims myself: src/lib/balances.ts does not exist; readMembers and listGroupsForUser return 0n literals (access.ts); leaveGroup/removeMember contain no balance check; expense_payer/expense_share/expense_split_input exist in 0003_expenses with no payment table anywhere; GroupOverview renders direction=settled zeros; and the target test file tests/components/group-screens.test.tsx exists. All checked out, so the proposal stands essentially as written. Points I weighed and kept: the per-group (not per-person) home breakdown reading of IAC-5, flagged in unknowns rather than hidden; the disabled Record-payment control, which has no IAC and whose write belongs to piece 7; and the no-horizontal-scroll reading of IAC-10. Nothing the proposal and the (absent) critique both missed was material enough to rewrite the plan around: refused leave/remove writes no activity entry, which is correct per TR-17 since a refusal is not a mutation.",
+    "files": [
+      {
+        "action": "create",
+        "change": "Pure bigint functions netBalances(memberIds, payers, shares) and simplifyDebts(balances): greedy largest-creditor vs largest-debtor, memberId tie-break for determinism, throws when sum!==0n, asserts <=n-1 transfers. No imports from db, money, or access.",
+        "path": "src/lib/balances.ts",
+        "why": "TR-6 algorithm in its only home; directly unit-testable per ADR-0009."
+      },
+      {
+        "action": "edit",
+        "change": "Add readBalancesForGroup (authorised, null for non-members; two grouped SUMs over non-deleted expenses, merged to bigint per member in canonical order) and readNetBalanceForMember (single-member net for guards); change readMembers to attach real balanceMinor instead of 0n and listGroupsForUser to attach the caller's real per-group net instead of 0n. Never select expense_split_input here.",
+        "path": "src/lib/access.ts",
+        "why": "Authorisation boundary owns the sums so no page sums by hand and TR-4's 'payer+share rows only' holds in one place."
+      },
+      {
+        "action": "edit",
+        "change": "In leaveGroup and removeMember transactions, read the leaver/remove-target net via readNetBalanceForMember and refuse non-zero with formError naming that the balance must be settled first; zero behaves exactly as today.",
+        "path": "src/app/actions/members.ts",
+        "why": "Server enforcement of IAC-8/TR-13; hidden buttons alone are bypassable."
+      },
+      {
+        "action": "create",
+        "change": "Async Server Component: requireUser, uuid parse + readGroup (notFound for non-members), readMembers + readBalancesForGroup, assert sum===0n, simplifyDebts, render BalancesScreen with members/balances/transfers/names.",
+        "path": "src/app/(app)/groups/[id]/balances/page.tsx",
+        "why": "IAC-1/2/3 screen; the assert-before-call is the TR-6 proof that a throw never reaches a user."
+      },
+      {
+        "action": "create",
+        "change": "Synchronous presentational screen: per-member table (visible direction words + mono figure, one row per member below 480px, amount right-aligned), dominant transfer list, settled sentence verbatim, disabled Record-payment button with piece-7 helper text, error/loading states per ui.md patterns.",
+        "path": "src/components/balances-screen.tsx",
+        "why": "Keeps the async page thin so component tests can assert copy and layout without cookies/db."
+      },
+      {
+        "action": "edit",
+        "change": "Accept balances+transfers props; render direction-worded member lines and the transfer list (or settled sentence when all zero) reusing the same copy as BalancesScreen; add Balances to the secondary action row nav.",
+        "path": "src/components/group-overview.tsx",
+        "why": "IAC-3 requires the settled state on the overview too; overview and balances must not disagree."
+      },
+      {
+        "action": "edit",
+        "change": "Fetch balances via readBalancesForGroup, assert sum, simplify, and pass balances+transfers into GroupOverview alongside members+entries.",
+        "path": "src/app/(app)/groups/[id]/page.tsx",
+        "why": "Overview currently renders 0n literals with direction settled; it must show real figures."
+      },
+      {
+        "action": "edit",
+        "change": "Fetch groups then per-group caller nets with Promise.allSettled; withhold HomeSummary totals while any group rejects and pass per-group failures through for inline rows; all-fail renders 'Couldn't load your balances.' with Try again.",
+        "path": "src/app/(app)/page.tsx",
+        "why": "IAC-7: a total over the groups that happened to load is a lie, so partial failure withholds totals."
+      },
+      {
+        "action": "create",
+        "change": "Two --text-2xl totals (You owe in text-negative, You are owed in text-positive) with per-group breakdown lines directly beneath each; renders nothing when its inputs are partial (withheld by the page).",
+        "path": "src/components/home-summary.tsx",
+        "why": "IAC-5/6 presentation isolated for component tests."
+      },
+      {
+        "action": "edit",
+        "change": "Render HomeSummary above the group list; failing groups render an inline error row with Try again instead of a balance; per-group rows show the caller's real net with owed/owes/settled direction.",
+        "path": "src/components/group-list.tsx",
+        "why": "Home currently shows 0n settled rows and no totals."
+      },
+      {
+        "action": "edit",
+        "change": "Show real per-member balances with direction words; hide Leave/Remove for non-zero targets and show the 'balance has to be settled first' sentence beside the member instead.",
+        "path": "src/components/members-screen.tsx",
+        "why": "IAC-8 visible half of the guard."
+      },
+      {
+        "action": "edit",
+        "change": "Leave/Remove dialogs keep current copy and render the server formError (settle-first refusal) inline via role=alert; no client-side balance math.",
+        "path": "src/components/member-actions.tsx",
+        "why": "Server is the enforcer; the client only displays the refusal where the action happened."
+      },
+      {
+        "action": "create",
+        "change": "Six-member known-answer fixture, exact-reproduction of nets, n-1 bound, determinism across runs and memberId tie-break, throw on non-zero sum.",
+        "path": "tests/lib/balances.test.ts",
+        "why": "TR-6/IAC-2 proof at the unit level."
+      },
+      {
+        "action": "create",
+        "change": "End-to-end over PGlite via createExpense + new reads: rule-mutation leaves balances unchanged; three-group home totals equal per-group sums with removed group excluded; leave/remove refused at non-zero and allowed at zero; removal keeps rows with identical balances and listed expenses.",
+        "path": "tests/integration/balances.test.ts",
+        "why": "IAC-4/6/8/9 and TR-13/16 proof against the real schema using existing helper patterns."
+      },
+      {
+        "action": "create",
+        "change": "Settled message verbatim from docs/ui.md (same extraction technique as group-overview-empty.test.tsx), direction wording for both signs, transfer-list rendering, error state.",
+        "path": "tests/components/balances-screen.test.tsx",
+        "why": "IAC-1/3 presentation proof without a database."
+      },
+      {
+        "action": "edit",
+        "change": "Replace pinned 0n/settled-only fixtures with computed balances fixtures matching the new GroupOverview props; keep the ui.md string-extraction assertions intact.",
+        "path": "tests/components/group-screens.test.tsx",
+        "why": "Existing overview tests pin the pre-balances literals and fail once real figures flow through."
+      }
+    ],
+    "issue": 8,
+    "kind": "feature",
+    "out_of_scope": [
+      "Recording or deleting a payment (TR-7, piece 7): this piece only reads the ledger; the balances screen's Record-payment control is present but disabled.",
+      "Search, filters and feed screens (piece 8).",
+      "Expense edit/delete writes: owned by the expenses piece; this ticket upholds the read side (never sum expense_split_input) and the removal side (TR-16) only.",
+      "Doc edits (docs/trd.md TR-4, docs/ui.md expense form, ADRs): already reflect the binding decisions; the reserved-path guard forbids touching them here.",
+      "Dark mode, theme tokens, and performance measurement (TR-25, covered by QA timing)."
+    ],
+    "qa_script": [
+      "Sign up as Ada, create group 'Lisbon' (EUR), invite Bob and Cara, record an equal-split dinner €120 paid by Ada and an exact-amount taxi paid by Bob: open /groups/[id]/balances and check each member row shows direction words plus figure and the transfer list shows who pays whom.",
+      "Settle the group with a compensating expense so all nets are zero: check both /groups/[id]/balances and /groups/[id] show \"Everyone's square in this group.\" instead of transfers.",
+      "On /groups/[id]/members with a non-zero balance, attempt Leave (as member) and Remove (as owner): both are refused with the settle-first sentence; add the settling expense and retry: both succeed.",
+      "On / with groups in debt and credit: check the two --text-2xl totals, their colours, and the per-group lines beneath each; leave one group (at zero) and check its rows vanish from both totals and breakdowns.",
+      "At 360px width on /groups/[id]/balances: check one row per member, right-aligned amounts, the full transfer list, and no horizontal scrolling; repeat at 1280px."
+    ],
+    "residual_risks": [
+      "Mixed-currency users: home totals sum minor units across groups that may not share a currency; fixtures and QA use one currency and no conversion exists by design, so QA should include a two-currency user to confirm the display does not mislead.",
+      "Home partial-failure granularity: per-group Try again revalidates the whole page rather than refetching one row; if QA finds the reload jarring, a Suspense-per-row shape is the follow-up, not part of this ticket.",
+      "IAC-5 wording says per-person breakdown while the plan builds per-group lines; if the maintainer meant per-counterparty lines, that is a scope clarification for the implementer to raise, not a second implementation hidden in this ticket.",
+      "When piece 7 (payments, TR-7) lands, readBalancesForGroup must union the payment table or every balance computed here silently understates; the work order names access.ts as the single extension point.",
+      "Large groups at 360px will vertically scroll no matter the layout; IAC-10 is verified against the small seeded group per the plan's stated reading."
+    ],
+    "risks": [
+      "TR-4's rewrite and the ui.md expense-form rule-storage copy already live in docs via the project brief; this ticket intentionally makes zero doc edits per the reserved-path guard — if the guard's docs exception was meant to apply, a maintainer must say so.",
+      "No payment table exists, so balances sum expenses only; when piece 7 lands, readBalancesForGroup must union payments or every balance in this ticket silently understates — the function is documented as the single place to extend.",
+      "Mixed-currency users: home totals sum minor units that are not the same unit; fixtures and QA use one currency, and cross-currency display needs a product decision (per-currency buckets vs converted total, and conversion is explicitly out of scope).",
+      "IAC-10's 'visible without scrolling' cannot hold for large groups at 360px; the plan reads it as no horizontal scroll + compact rows, and QA should judge it on the seeded (small) group.",
+      "Home partial-failure with Server Components has limited granularity: per-group Try again revalidates the page (revalidatePath) rather than refetching one row; a finer Suspense-per-row shape is possible but heavier than the criterion needs."
+    ],
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "six-member fixture yields the checked-in transfer list exactly",
+          "transfers reproduce every net balance and use at most n-1 transfers",
+          "same balances twice give byte-identical transfers (memberId tie-break)",
+          "non-zero-sum input throws instead of rendering"
+        ],
+        "path": "tests/lib/balances.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "rewriting expense_split_input rows directly leaves every balance unchanged",
+          "three-group home totals equal the sum of per-group nets; removed group excluded",
+          "leave/remove refused at non-zero balance with no write; allowed at zero",
+          "removal keeps payer/share rows, balances identical pre/post, expenses still listed with the name",
+          "changing the rounding path leaves stored balances identical"
+        ],
+        "path": "tests/integration/balances.test.ts"
+      },
+      {
+        "action": "create",
+        "cases": [
+          "settled message matches docs/ui.md verbatim",
+          "owed/owes direction wording renders beside each figure",
+          "transfer list renders dominant with payer/payee names",
+          "error state renders with Try again"
+        ],
+        "path": "tests/components/balances-screen.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "overview renders real balances and transfers instead of 0n literals",
+          "settled copy still matches docs/ui.md extraction"
+        ],
+        "path": "tests/components/group-screens.test.tsx"
+      }
+    ],
+    "understanding": "Issue #8 (part of epic #1, depends on #6 which has merged) builds the read-only balances piece: per-member nets + greedy simplified debts on /groups/[id]/balances, real figures on the group overview and home (owe/owed totals + breakdowns), and the balance-guarded leave/remove rules with removal that preserves history. Binding decisions from the pipeline (route note / replan-project on #1): (1) the split RULE is stored with the expense (split_type + expense_split_input, already in schema via 0003_expenses and written by createExpenseWithRows) while balances read ONLY expense_payer/expense_share; (2) TR-4 as rewritten (edit/delete replaces that expense's payer+share rows in one transaction with its activity entry; no balance changes except through a write to that expense or a payment; algorithm changes never restate history). Current code state: no src/lib/balances.ts; readMembers and listGroupsForUser return 0n literals with comments naming this piece as their replacement; GroupOverview/MembersScreen/GroupList all render direction='settled' zeros; leaveGroup/removeMember have no balance check; no payment table and no seed endpoint exist, so balances sum expenses only and QA drives flows manually.",
+    "unknowns": [
+      "Whether QA's seed will include multi-expense balance fixtures by the time this is tested (no seed endpoint exists in src/app/api yet; the QA script assumes manual flows).",
+      "The exact intended 'per-person breakdown' on home (per counterparty vs per group): the plan implements per-group lines naming the group and amount, which is what IAC-6's exact-sum check is written against.",
+      "Whether the Record-payment button must be visible in this piece despite its write belonging to piece 7: no IAC pins it, so it ships disabled with a helper sentence."
+    ],
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-02T20:57:28.130Z",
+  "validated_ac_changes": []
 }
