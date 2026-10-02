@@ -2,9 +2,42 @@
   "name": "tabs-app",
   "private": true,
   "scripts": {
-    "sdlc:verify": "echo \"sdlc:verify is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:serve": "echo \"sdlc:serve is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:seed": "echo \"sdlc:seed is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\"",
-    "sdlc:ready": "echo \"sdlc:ready is a stub until there is code for it to run - its target is in .sdlc/memory/project.md\""
+    "sdlc:verify": "npm run typecheck && npm run lint && vitest run",
+    "sdlc:serve": "TABS_ENV=local next build && TABS_ENV=local next start --port 3000",
+    "sdlc:seed": "node scripts/seed.mjs",
+    "sdlc:ready": "curl -fsS --max-time 5 http://localhost:3000/api/health",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "TABS_ENV=local vitest run",
+    "build": "next build",
+    "dev": "TABS_ENV=local next dev",
+    "db:generate": "drizzle-kit generate"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@neondatabase/serverless": "1.2.0",
+    "drizzle-orm": "0.45.3",
+    "next": "16.3.8",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
+    "@testing-library/jest-dom": "6.10.0",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "4.7.0",
+    "drizzle-kit": "0.31.11",
+    "eslint": "9.39.5",
+    "eslint-plugin-react": "7.37.5",
+    "eslint-plugin-react-hooks": "5.2.0",
+    "jsdom": "26.1.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0",
+    "vitest": "5.0.3"
   }
 }

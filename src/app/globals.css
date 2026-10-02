@@ -1,0 +1,101 @@
+@import 'tailwindcss';
+
+/*
+ * The theme, transcribed token for token from docs/ui.md. No screen may contain a colour
+ * literal, so these are the only colours in the product.
+ *
+ * Dark mode is deliberately absent: docs/ui.md forbids a partial one, and adding the whole
+ * set later is a matter of overriding these same names.
+ */
+@theme {
+  --color-bg: #ffffff;
+  --color-surface: #f7f8fa;
+  --color-border: #e3e6ea;
+  --color-text: #14181f;
+  --color-text-muted: #5b6675;
+  --color-primary: #1f5eff;
+  --color-primary-contrast: #ffffff;
+  --color-positive: #0a7c4a;
+  --color-negative: #b3261e;
+  --color-focus: #1f5eff;
+
+  /* The `space` infix is docs/ui.md's name for these, kept so a utility reads as the token
+     it came from: gap-space-3 is --space-3. The --spacing-* prefix is not decoration — it is
+     the Tailwind v4 namespace that generates those utilities at all. A token declared
+     --space-3 emits nothing, silently, and every spacing use in src/ compiles to no rule. */
+  --spacing-space-1: 4px;
+  --spacing-space-2: 8px;
+  --spacing-space-3: 12px;
+  --spacing-space-4: 16px;
+  --spacing-space-6: 24px;
+  --spacing-space-8: 32px;
+
+  --radius: 8px;
+
+  --font-body: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --text-sm: 14px;
+  --text-base: 16px;
+  --text-lg: 20px;
+  --text-xl: 24px;
+  --text-2xl: 30px;
+}
+
+html {
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  /* A 150ms ease-out colour transition on interactive elements, and nothing else. */
+}
+
+h1 {
+  font-size: var(--text-2xl);
+  line-height: 1.2;
+}
+h2 {
+  font-size: var(--text-xl);
+  line-height: 1.2;
+}
+h3 {
+  font-size: var(--text-lg);
+  line-height: 1.2;
+}
+
+/*
+ * The focus ring is defined once and never removed: a 2px solid ring at a 2px offset, on
+ * every focusable element. `:focus-visible` would hide it from a mouse click, which is what
+ * makes it invisible to somebody using a keyboard on a device that also reports a pointer.
+ */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible,
+:where(a, button, input, select, textarea, [tabindex]):focus {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius);
+}
+
+/*
+ * The skip link leaves the clip when it takes focus and takes its place in the flow, so it needs
+ * a margin of its own to clear the header below it. `focus:mb-space-2` in its class list loses:
+ * `not-sr-only` sets `margin: 0`, both live in @layer utilities, and utilities sort by property
+ * so margin is emitted first. An unlayered rule outranks every layered one whatever the order.
+ */
+.skip-link:focus {
+  margin-bottom: var(--spacing-space-2);
+}
+
+/* Below 480px a card has no border, so it does not read as a dialog on a phone. */
+@media (max-width: 480px) {
+  .card {
+    border-color: transparent;
+    background: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    transition: none;
+  }
+}
