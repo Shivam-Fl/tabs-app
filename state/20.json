@@ -171,7 +171,14 @@
     "version": 1,
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/lib/money.ts",
+    "src/lib/access.ts",
+    "src/components/member-actions.tsx",
+    "src/components/rename-group-form.tsx",
+    "tests/lib/money.test.ts",
+    "tests/components/group-screens.test.tsx"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
