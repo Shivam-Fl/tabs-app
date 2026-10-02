@@ -914,5 +914,32 @@
       }
     ],
     "pr": "13"
-  }
+  },
+  "qa": {
+    "verdict": "fail",
+    "introduced_bugs": 1,
+    "ac_ids": [
+      "AC-1",
+      "AC-2",
+      "AC-3",
+      "AC-4",
+      "AC-5",
+      "AC-6",
+      "AC-7",
+      "AC-8",
+      "AC-9",
+      "AC-10",
+      "AC-11"
+    ],
+    "sha": "598cda83e1fdbb384fc9a218fee9e36753a224bb",
+    "run_id": "36951425341",
+    "work_order_version": 1,
+    "at": "2026-10-02T02:21:36.266Z"
+  },
+  "qa_open_bugs": [
+    {
+      "id": "BUG-1",
+      "title": "Four links render below the 44px minimum touch target docs/ui.md requires"
+    }
+  ]
 }
