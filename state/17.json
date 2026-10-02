@@ -564,5 +564,50 @@
     "understanding": "The previous plan was not wrong about the code — all five acceptance criteria passed. But its diagnosis of BUG-1 was wrong in a way that made the fix impossible, which is why QA failed with introduced_by_pr: true. v1 correctly identified the MECHANISM but made the remedy 're-word the comment' while putting rewording out of scope — a plan that cannot converge, since the comment must keep naming the spellings for AC-2's demonstration to mean anything. The new approach is DIFFERENT: declare the source boundary in src/app/globals.css instead of touching prose, verified by building both revisions and diffing the full emitted rule set. Two corrections per plan review: AC-2 no longer lists max-w-[theme(cap)] among spellings the comment names and restores the mutation demonstration; AC-6 is scoped to tests/-only spellings since .sdlc/docs-sourced rules survive by design.",
     "version": 2,
     "mode": "committed"
+  },
+  "approved_work_order": {
+    "acceptance": [
+      {
+        "check": "At a 360x640 viewport, signed in with the 40-character display name Wolfeschlegelsteinhausenbergerdorffenfun, document.documentElement.scrollWidth equals document.documentElement.clientWidth (360) on both / and /settings",
+        "id": "AC-1"
+      },
+      {
+        "check": "The BUG-4 regression guard rejects every bracketed max-width on the display-name link, including the spellings the previous guard let through",
+        "id": "AC-2"
+      },
+      {
+        "check": "The Shell composition in the test suite renders exactly one <main> element, with no <main> descendant of another <main>",
+        "id": "AC-3"
+      },
+      {
+        "check": "src/components/ui/top-bar.tsx, src/components/shell.tsx and tests/components/ui.test.tsx each end with a newline, and npm run sdlc:verify stays green at 8 files and 90 tests",
+        "id": "AC-4"
+      },
+      {
+        "check": "The top bar's class lists are byte-identical to main after this change: no edit to the shrink chain (min-w-0 on the nav, shrink-0 on Groups and the sign-out form, min-w-[44px] on the name link, truncate on its span)",
+        "id": "AC-5"
+      },
+      {
+        "check": "BUG-1 — the production stylesheet contains no CSS rule for a class spelling that appears only in tests/. Building the app emits exactly two max-w rules, max-w-[360px] and max-w-[720px], and emits nothing for the class spellings named only in tests/ (max-w-[calc(100%-2rem)], max-w-[var(--x)], max-w-[120px], max-w-[--cap])",
+        "id": "AC-6"
+      }
+    ],
+    "approach": "Draw the source boundary Tailwind was never given, in the one place the build config lives: add `@source not '../../tests';` to src/app/globals.css immediately after the `@import 'tailwindcss'` line. Nothing else in product code changes. This is deliberately not a rewording of the comment. Add tests/lib/tailwind-source-scope.test.ts as the regression guard: exclusion exists and names tests/, is not source(none), non-vacuity, path resolves exactly to tests/. Verified by building both revisions and diffing the full emitted rule set.",
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add `@source not '../../tests';` on the line immediately after `@import 'tailwindcss';`, with a short comment recording why. No other line of the file changes.",
+        "path": "src/app/globals.css"
+      },
+      {
+        "action": "create",
+        "change": "New Vitest file with four cases guarding the exclusion: declares @source not naming tests/; not source(none); non-vacuity; path resolves to tests/ exactly.",
+        "path": "tests/lib/tailwind-source-scope.test.ts"
+      }
+    ],
+    "issue": 17,
+    "understanding": "The previous plan was not wrong about the code — all five acceptance criteria passed. But its diagnosis of BUG-1 was wrong in a way that made the fix impossible, which is why QA failed with introduced_by_pr: true. v1 correctly identified the MECHANISM but made the remedy 're-word the comment' while putting rewording out of scope — a plan that cannot converge, since the comment must keep naming the spellings for AC-2's demonstration to mean anything. The new approach is DIFFERENT: declare the source boundary in src/app/globals.css instead of touching prose, verified by building both revisions and diffing the full emitted rule set. Two corrections per plan review: AC-2 no longer lists max-w-[theme(cap)] among spellings the comment names and restores the mutation demonstration; AC-6 is scoped to tests/-only spellings since .sdlc/docs-sourced rules survive by design.",
+    "version": 2,
+    "mode": "committed"
   }
 }
