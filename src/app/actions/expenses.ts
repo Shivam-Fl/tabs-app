@@ -301,13 +301,14 @@ function validateExpense(input: {
     // Every non-null input lands in the int8 input_value column exactly as it was typed —
     // minor units for an exact split, hundredths of a percent for a percentage, a plain count
     // for shares — so every one of them carries the same bound as the total and the payer
-    // parts, whatever unit the split type counts in. The sentence says "amount" only for the
-    // exact branch, where the number really is money.
+    // parts, whatever unit the split type counts in. An exact amount and a share count are
+    // both refused with the amount sentence (#33); a percentage, which the sum-to-100% check
+    // below refuses anyway, keeps the neutral "number".
     if (parsed.value > MAX_INT8) {
       fieldErrors[`input.${member.memberId}`] ??=
-        splitType === 'exact'
-          ? 'That amount is too large to record.'
-          : 'That number is too large to record.';
+        splitType === 'percentage'
+          ? 'That number is too large to record.'
+          : 'That amount is too large to record.';
       return { memberId: member.memberId, value: 0n };
     }
     return { memberId: member.memberId, value: parsed.value };

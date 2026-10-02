@@ -743,7 +743,8 @@ describe('amounts the columns cannot hold', () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That number is too large to record.');
+    // A share count takes the amount sentence, like an exact input (#33).
+    expect(result.fieldErrors?.[`input.${samMemberId}`]).toBe('That amount is too large to record.');
     // Beside the member who typed it, not the first member in the split.
     expect(result.fieldErrors?.[`input.${ownerMemberId}`]).toBeUndefined();
     expect(await rowCounts()).toEqual(nothing);
