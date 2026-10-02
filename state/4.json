@@ -81,7 +81,7 @@
     }
   ],
   "epic": 1,
-  "resume_at": "plan",
+  "resume_at": null,
   "flow_plan": {
     "kind": "feature",
     "confidence": 90,
@@ -93,7 +93,7 @@
     },
     "decided_at": "2026-10-02T09:46:18.248Z"
   },
-  "stopped_at": "plan",
+  "stopped_at": null,
   "dispatched_stage": "plan",
   "failure_packet": {
     "issue": 4,
