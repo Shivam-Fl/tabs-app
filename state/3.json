@@ -676,17 +676,19 @@
       "AC-9",
       "AC-10",
       "AC-11",
-      "AC-12"
+      "AC-12",
+      "AC-13",
+      "AC-14"
     ],
-    "sha": "d365f2ce89eaddf1f77e53d1f19b2a336703e25a",
-    "run_id": "36960062492",
-    "work_order_version": 2,
-    "at": "2026-10-02T04:39:03.824Z"
+    "sha": "71e2e89a3acab533da9508aa8089f096bc0f8b27",
+    "run_id": "36972755420",
+    "work_order_version": 3,
+    "at": "2026-10-02T06:57:24.742Z"
   },
   "qa_open_bugs": [
     {
-      "id": "BUG-2",
-      "title": "The skip link in the new root layout is 40px tall and overlaps the brand link"
+      "id": "BUG-4",
+      "title": "The top bar ellipsises ordinary display names on a wide screen, where the header is almost entirely empty"
     }
   ]
 }
