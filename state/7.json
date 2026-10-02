@@ -453,7 +453,8 @@
         "detail": "tests/lib/money.test.ts is edited by this PR but appears in neither the work order's files[] nor its tests[]. The addition is benign — unit coverage for the new in-scope formatDecimalUnits/formatMajorUnits/formatSplitInput helpers in src/lib/money.ts, overlapping the round-trip case the work order assigns to the integration suite — so no rework is asked for; it is recorded here so the scope check shows it was seen.\n\n`tests/lib/money.test.ts:437`\n\nEvidence: gh pr diff 29 --name-only lists 15 files; work-order files[] lists 11 src files and tests[] lists 3 test files (expenses-edit, expense-form, expense-list). The 15th diff file, tests/lib/money.test.ts (+63 lines: 'stored numbers back to editable text' describe block), is in neither list. Its cases cover only the new helpers added to src/lib/money.ts, which is in files[].\n\nFix: Accept as-is, or record tests/lib/money.test.ts in the work order's tests; no code change needed."
       }
     ],
-    "pr": "29"
+    "pr": "29",
+    "filed": 33
   },
   "qa": {
     "verdict": "pass",
