@@ -165,8 +165,11 @@ function describe(entry: ActivityRow): string {
     'member.claimed': 'claimed their place in the group',
     // The subject and detail the entry carries are not rendered here: the feed screens of #8
     // read them. Until then this line says what happened without repeating the amount, which
-    // the overview does not otherwise show for an expense.
+    // the overview does not otherwise show for an expense. An edit whose detail is empty says
+    // "edited an expense" and nothing more, which is exactly what was recorded.
     'expense.added': 'added an expense',
+    'expense.edited': 'edited an expense',
+    'expense.deleted': 'deleted an expense',
   };
   return `${who} ${what[entry.kind]}`;
 }
