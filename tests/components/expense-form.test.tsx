@@ -245,11 +245,16 @@ describe('a failed submit', () => {
     });
     // Beside the field, wired to it by aria-describedby — three elements on this screen say
     // this sentence, because the same parser the server uses computed the same refusal live.
-    expect(document.getElementById('field-amount-error')).toHaveTextContent(
+    // Reached through the input's OWN aria-describedby rather than through a literal id: Field
+    // mints a per-instance id now, and a test that hardcoded `field-amount-error` was asserting
+    // the old naming scheme rather than that the message is attached to the field it belongs to.
+    const amount = screen.getByLabelText('Amount');
+    const describedBy = amount.getAttribute('aria-describedby');
+    expect(describedBy).toBeTruthy();
+    expect(document.getElementById(describedBy as string)).toHaveTextContent(
       'Enter a positive amount, without a sign.',
     );
-    expect(screen.getByLabelText('Amount')).toHaveAttribute('aria-invalid', 'true');
-    expect(screen.getByLabelText('Amount')).toHaveAttribute('aria-describedby', 'field-amount-error');
+    expect(amount).toHaveAttribute('aria-invalid', 'true');
 
     // Everything else is exactly as it was typed. React resets an uncontrolled form when its
     // action runs, and losing a half-filled expense to one bad field is the failure this

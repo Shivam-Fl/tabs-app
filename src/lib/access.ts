@@ -290,11 +290,18 @@ export async function readGroup(session: Session, groupId: string, userId: strin
   return rows[0] ?? null;
 }
 
-/** The group's active members, owner first. Null for a caller who is not a member. */
+/**
+ * The group's active members, owner first. Null for a caller who is not a member.
+ *
+ * The authorisation is the memberOfGroup predicate INSIDE this query, the same spelling of the
+ * rule the write path uses, rather than a membership read followed by a second fetch: a caller
+ * with no active row in the group matches no row here, so there is no second half to forget.
+ *
+ * That predicate matches the CALLER's own active row, which the listing returns as any other, so
+ * an empty result means the caller is not a member. A group is never empty — its owner cannot
+ * leave and a membership row is never deleted (TR-16) — so this cannot 404 a member.
+ */
 export async function readMembers(session: Session, groupId: string, userId: string): Promise<MemberRow[] | null> {
-  const membership = await readMembership(session, groupId, userId);
-  if (!membership) return null;
-
   const rows = await session
     .select({
       memberId: members.id,
@@ -305,11 +312,13 @@ export async function readMembers(session: Session, groupId: string, userId: str
     })
     .from(members)
     .leftJoin(users, eq(users.id, members.userId))
-    .where(and(eq(members.groupId, groupId), isNull(members.removedAt)))
+    .where(and(eq(members.groupId, groupId), isNull(members.removedAt), memberOfGroup(groupId, userId)))
     // The CANONICAL member order, which the expense form's participant picker renders and the
     // split's remainder rule names (TR-3): owner first, then by when the membership was
     // created, then by id so two rows written in the same transaction still have an order.
     .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
+
+  if (rows.length === 0) return null;
 
   return rows.map((row) => ({
     memberId: row.memberId,

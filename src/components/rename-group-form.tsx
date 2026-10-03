@@ -1,6 +1,7 @@
 'use client';
 
 import { useActionState, useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 
 import { renameGroup } from '@/app/actions/groups';
 import type { GroupResult } from '@/app/actions/groups';
@@ -11,6 +12,7 @@ import { Button, Field } from '@/components/ui';
  * refused by the action as well, because a control that is merely absent is not a permission.
  */
 export function RenameGroupForm({ groupId, name: initialName }: { groupId: string; name: string }) {
+  const router = useRouter();
   const formRef = useRef<HTMLFormElement>(null);
   const [state, formAction, pending] = useActionState<GroupResult | null, FormData>(renameGroup, null);
   const [name, setName] = useState(initialName);
@@ -25,6 +27,13 @@ export function RenameGroupForm({ groupId, name: initialName }: { groupId: strin
     if (!state) return;
     formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]')?.focus();
   }, [state]);
+
+  // The rename revalidates the layout, but that alone leaves the server-rendered name around
+  // this form — the members back-link, the paragraph under the heading, the row on the home
+  // list — showing the old one until a manual reload. This is what re-renders them.
+  useEffect(() => {
+    if (state?.ok) router.refresh();
+  }, [state, router]);
 
   return (
     <form ref={formRef} action={formAction} className="flex max-w-[360px] flex-col gap-space-2" noValidate>

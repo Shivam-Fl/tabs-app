@@ -46,13 +46,26 @@ export function formatMinor(minor: bigint, currency: string): string {
   const negative = minor < 0n;
   const absolute = negative ? -minor : minor;
 
-  const whole = negative ? -(absolute / scale) : absolute / scale;
+  // The whole part is always the ABSOLUTE value, so the formatter never decides where the sign
+  // goes: at whole === 0 it renders '€0.00' with no sign at all, which is how -5n (that is,
+  // -€0.05) came out reading as a positive five cents. The sign is carried separately below.
+  const whole = absolute / scale;
   const fraction = (absolute % scale).toString().padStart(digits, '0');
 
-  return new Intl.NumberFormat('en-US', { style: 'currency', currency })
+  const formatter = new Intl.NumberFormat('en-US', { style: 'currency', currency });
+  const amount = formatter
     .formatToParts(whole)
     .map((part) => (part.type === 'fraction' ? fraction : part.value))
     .join('');
+
+  if (!negative) return amount;
+
+  // The minus is the formatter's own, read from the same pinned locale and currency, rather than
+  // a hardcoded hyphen that could disagree with it. A formatter that produced no minus part at
+  // all leaves the ASCII hyphen, which is what en-US produces anyway.
+  const minus = formatter.formatToParts(-1).find((part) => part.type === 'minusSign')?.value ?? '-';
+
+  return `${minus}${amount}`;
 }
 
 /**

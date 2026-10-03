@@ -14,14 +14,18 @@ vi.mock('@/app/actions/members', () => ({
   removeMember: vi.fn(),
 }));
 // The navigation is the point of the leave path, so the router is a stand-in this suite reads.
-const push = vi.hoisted(() => vi.fn());
-vi.mock('next/navigation', () => ({
-  useRouter: () => ({ push, refresh: vi.fn() }),
-}));
+// ONE shared router for the whole file, so an assertion observes the SAME fns the component
+// called: a fresh { push: vi.fn(), refresh: vi.fn() } per useRouter() call is what a mock that
+// builds the object inline returns, and it makes every refresh assertion vacuous — it can only
+// ever see a spy nobody used.
+const router = vi.hoisted(() => ({ push: vi.fn(), refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
 
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  router.push.mockReset();
+  router.refresh.mockReset();
 });
 
 const GROUP_ID = '6b1f2f9c-0f1a-4a4f-9d1f-2f0a6c7b8d90';
@@ -63,7 +67,7 @@ describe('leaving from the members page', () => {
     unmount();
     resolveLeave?.({ ok: true, groupId: GROUP_ID });
 
-    await waitFor(() => expect(push).toHaveBeenCalledWith(`/?left=${GROUP_ID}`));
+    await waitFor(() => expect(router.push).toHaveBeenCalledWith(`/?left=${GROUP_ID}`));
   });
 
   it('renders a refused leave in place, with no navigation', async () => {
@@ -79,7 +83,7 @@ describe('leaving from the members page', () => {
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('You own this group, so you can’t leave it.'),
     );
-    expect(push).not.toHaveBeenCalled();
+    expect(router.push).not.toHaveBeenCalled();
   });
 });
 
@@ -95,7 +99,38 @@ describe('removing somebody else', () => {
     // where it shows. The continuation fires nothing for it, before or after the fix.
     await waitFor(() => expect(removeMember).toHaveBeenCalledTimes(1));
     await settle();
-    expect(push).not.toHaveBeenCalled();
+    expect(router.push).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: 'Remove' })).toBeInTheDocument();
+  });
+
+  it('confirms and refreshes exactly once, and only after the removal has committed', async () => {
+    let resolveRemove: ((result: MemberResult) => void) | undefined;
+    vi.mocked(removeMember).mockImplementation(
+      () =>
+        new Promise<MemberResult>((resolve) => {
+          resolveRemove = resolve;
+        }),
+    );
+
+    render(<RemoveButton groupId={GROUP_ID} memberId={MEMBER_ID} memberName="Sam" />);
+    press('Remove');
+    press('Remove Sam');
+
+    // In flight. Neither the confirmation nor the refresh has a committed result to act on: the
+    // refresh is dispatched from the committed ok state, not from the action's continuation.
+    await waitFor(() => expect(removeMember).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByText('Removed Sam.')).not.toBeInTheDocument();
+    expect(router.refresh).not.toHaveBeenCalled();
+
+    resolveRemove?.({ ok: true, groupId: GROUP_ID });
+
+    await waitFor(() => expect(screen.getByText('Removed Sam.')).toHaveAttribute('role', 'status'));
+    // Exactly once: the effect that fires it is guarded, and the result object it reacts to does
+    // not change again.
+    expect(router.refresh).toHaveBeenCalledTimes(1);
+    // The row's disappearance on the refreshed list is the durable signal, but until that lands
+    // the button that just removed him must not submit a second removal.
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled();
   });
 });

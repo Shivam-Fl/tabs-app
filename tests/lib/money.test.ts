@@ -37,9 +37,25 @@ describe('formatMinor', () => {
     expect(formatMinor(42000n, 'INR')).toBe('₹420.00');
   });
 
+  it('carries the sign on a negative smaller than one whole unit', () => {
+    // The whole part is 0, so Intl renders '€0.00' with no sign of its own: rendering the whole
+    // part from the signed value dropped the minus entirely and -5 minor units read as a
+    // positive five cents. The sign is carried separately and read from the formatter.
+    expect(formatMinor(-5n, 'EUR')).toBe('-€0.05');
+    expect(formatMinor(-1n, 'EUR')).toBe('-€0.01');
+    expect(formatMinor(-99n, 'EUR')).toBe('-€0.99');
+    // The boundary either side of one whole unit: below it the formatter signs nothing, at it
+    // the formatter would sign for itself.
+    expect(formatMinor(-100n, 'EUR')).toBe('-€1.00');
+  });
+
   it('renders JPY with no fraction digits, because the currency has none', () => {
     expect(formatMinor(0n, 'JPY')).toBe('¥0');
     expect(formatMinor(1234n, 'JPY')).toBe('¥1,234');
+    // A zero-fraction currency never had a sub-unit amount to lose the sign on, and the signed
+    // whole path is unchanged.
+    expect(formatMinor(-5n, 'JPY')).toBe('-¥5');
+    expect(formatMinor(-1234n, 'JPY')).toBe('-¥1,234');
   });
 
   it('renders BHD with three fraction digits', () => {
@@ -53,6 +69,17 @@ describe('formatMinor', () => {
     // Intl's business, not this module's.
     expect(formatted.endsWith('1,234.567')).toBe(true);
     expect(formatMinor(0n, 'BHD').endsWith('0.000')).toBe(true);
+
+    // A sub-unit negative here is 0.005: the formatter signs nothing for a whole part of 0, so
+    // this is the same defect one fraction digit deeper, and the minus is still the formatter's
+    // own rather than one this module invented.
+    const minus = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'BHD' })
+      .formatToParts(-1)
+      .find((part) => part.type === 'minusSign')?.value;
+    expect(minus).toBeTruthy();
+    const subUnit = formatMinor(-5n, 'BHD');
+    expect(subUnit.startsWith(minus ?? '')).toBe(true);
+    expect(subUnit.endsWith('0.005')).toBe(true);
   });
 
   it('is exact above Number.MAX_SAFE_INT, where dividing by 100 as a float is not', () => {
