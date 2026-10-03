@@ -32,11 +32,11 @@ One Next.js application, one database, one boundary. Reads are React Server Comp
 - `src/lib/auth.ts` — Password hashing, session creation and revocation, sign-in rate limiting, and the requireUser() every page and action calls.
 - `src/lib/access.ts` — The authorisation boundary: membership-scoped queries, requireMember(), and the owner-only checks, so no call site can read a group by id alone.
 - `src/lib/money.ts` — Parsing, formatting and splitting amounts in integer minor units. The only file in which arithmetic on money happens.
-- `src/lib/balances.ts` — Per-member net balances and the simplified-debt algorithm, computed from stored shares and payer amounts.
+- `src/lib/balances.ts` — Per-member net balances and the simplified-debt algorithm, computed from stored shares and payer amounts. (Does not exist yet — balances are literal `0n` in access.ts until #8; the design is unchanged, the file just arrives with that ticket.)
 - `src/lib/activity.ts` — The only writer of the feed, always inside the caller's transaction so a change and its entry commit together.
 - `src/app/` — Routes, layouts and Server Components — one directory per screen, one h1 each.
-- `src/app/actions/` — Server Actions, one file per noun, each validating, authorising and writing in a single transaction.
-- `src/app/api/` — The only two HTTP endpoints: GET /api/health and POST /api/dev/seed.
+- `src/app/actions/` — Server Actions, one file per noun (auth, profile, groups, members, expenses), each validating, authorising and writing in a single transaction.
+- `src/app/api/` — HTTP endpoints. GET /api/health is here; POST /api/dev/seed arrives with piece 9 and is not routable yet, so the seed is a health-check stub until then.
 - `src/components/ui/` — The design-system primitives — Button, Input, Card, Dialog, Money, EmptyState, ErrorState — built only from theme tokens.
 - `tests/` — Vitest unit and integration tests; integration tests run against a fresh in-memory PGlite and never touch a network.
 
@@ -84,18 +84,17 @@ what deliberately is not, in `docs/prd.md`; how every screen looks and behaves, 
 - **TR-27** The README documents every environment variable with its purpose and whether it is required, one command to run the application locally with nothing installed, and the Vercel deploy from scratch: which database to add, which variables to set, and how migrations run.
 
 ## Commands
-Nothing here runs yet: the repository has no code, so every verb is a stub in `package.json`, and the command beside it is its TARGET. The first ticket whose code a verb runs makes it real (the reserved-path guard allows exactly that once), and ci-verify fails any branch that has code while `sdlc:verify` is still a stub.
 
-- `sdlc:verify` — stub now; target `npm run typecheck && npm run lint && vitest run`
-- `sdlc:serve` — stub now; target `next build && next start --port 3000`
-- `sdlc:seed` — stub now; target `node scripts/seed.mjs`
-- `sdlc:ready` — stub now; target `curl -fsS --max-time 5 http://localhost:3000/api/health`
+All four verbs are real since #13 and #25: typecheck, lint and vitest run; a production build
+answering on port 3000 (`TABS_ENV=local next build && next start --port 3000`); the seed check
+described above (real seeding through `POST /api/dev/seed` is piece 9, issue #11); and the
+readiness poll. `sdlc:serve` builds with `TABS_ENV=local` on both halves, so a runner with
+nothing set boots on the local defaults and never refuses.
 
-Stubbed for now:
-- sdlc:verify — a stub on this branch, which has no code. Made real by the first ticket that lands src/db, the package.json scripts typecheck and lint, and at least one file under tests/; the spec's order of work step 1 (skeleton, database, accounts, sessions, health) owns it.
-- sdlc:serve — a stub on this branch. Made real by next.config.ts, an app/ directory that builds, and a boot that answers on port 3000; the spec's order of work step 1 owns it.
-- sdlc:seed — a stub on this branch. Made real by scripts/seed.mjs and app/api/dev/seed/route.ts, which is the spec's order of work step 5 (activity, search, filters, seed, deploy guide).
-- sdlc:ready — a stub on this branch. Made real by app/api/health/route.ts returning 200 with a real query; the spec's order of work step 1 owns it.
+- `sdlc:verify` — `npm run typecheck && npm run lint && vitest run`
+- `sdlc:serve` — `TABS_ENV=local next build && TABS_ENV=local next start --port 3000`
+- `sdlc:seed` — `node scripts/seed.mjs` (health-check and TABS_ENV guard only, until piece 9)
+- `sdlc:ready` — `curl -fsS --max-time 5 http://localhost:3000/api/health`
 
 ## Deploy
 Production is Vercel, connected to this repository, running the Next.js 16 Node.js runtime, with a Neon Postgres added from Vercel's Storage tab and its pooled connection string in DATABASE_URL. The same DATABASE_URL variable is the whole switch: set, the app is on Neon; unset, it is on in-process PGlite. Migrations are not a Vercel build step — they are applied by src/db/migrate.ts on boot behind a Postgres advisory lock, so a cold start or two racing each other applies each migration once and never twice.
