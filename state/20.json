@@ -435,26 +435,26 @@
     "pr": "21",
     "qa": [
       {
-        "actual": "Both /groups/:id and /groups/:id/members answer HTTP 200 while rendering the 'This group isn't available.' not-found UI. No group data and no group name leak (screenshots prove it) — only the wire status disagrees with TR-1's 'receives 404'.",
+        "actual": "The multipart Server Action request carries the field's INITIAL group name no matter what is visible in the input. Verified at the request level: clearing the field, typing 81 characters, and typing a valid new name all submit the original name; the server renames to the submitted (unchanged) name and returns ok:true, so the form shows a false 'Saved.' while the stored name never changes. Reproduced identically on the base commit 7390e3e served from a clean worktree, so the defect predates this PR.",
         "evidence": [
-          "qa-evidence/T-4-status.json",
-          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/test-finished-1.png",
-          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/test-finished-2.png",
-          "qa-evidence/test-results/permission-T-4-signed-in-n-ef801-n-members-and-overview-URLs-chromium/trace.zip"
+          "qa-evidence/action-request.txt",
+          "qa-evidence/submitted-names.txt",
+          "qa-evidence/action-response.txt",
+          "qa-evidence/test-results/pr21-PR-21-members-screen--665ad--refused-and-the-name-stays-chromium/trace.zip",
+          "qa-evidence/test-results/pr21-PR-21-members-screen--13c4b-the-new-name-with-no-reload-chromium/trace.zip"
         ],
-        "expected": "A signed-in non-member opening /groups/:id or /groups/:id/members receives HTTP 404 (TR-1: 'A non-member receives 404 and no data').",
+        "expected": "Clicking Save submits the value visible in the field: an empty name is refused with 'Enter a name for this group.', an 81-character name with 'That name is too long.', and a valid new name is stored, after which the surrounding names update.",
         "id": "BUG-1",
         "introduced_by_pr": false,
         "repro": [
-          "Sign up as user A and create a group; note its /groups/:id/members URL.",
-          "In a clean browser context, sign up as user B.",
-          "As B, open A's members URL and A's overview URL.",
-          "Observe the not-found UI in both cases, but HTTP 200 on the wire (see T-4-status.json)."
+          "Sign up as a fresh synthetic user on the preview and create a group.",
+          "Open the group's members page and change the Group name field to a new value (typed character by character, exactly as a user would).",
+          "Click Save and capture the POST request body.",
+          "Observe the multipart body carries the ORIGINAL name in the name field, 'Saved.' appears, and after a reload the back-link still shows the original name."
         ],
         "reproducible": "always",
-        "severity": "minor",
-        "suspected_cause": "The members and group pages still call notFound() on a null read (members page checks group/membership/members and calls notFound; that file is untouched by this diff, which only changed readMembers internals). The 200 is how the framework answers that notFound call on this navigation, not a change in the authorisation logic — nothing protected is rendered.",
-        "title": "Non-member group URLs render the not-found UI but answer HTTP 200 instead of 404"
+        "severity": "major",
+        "title": "Rename Save submits the field's initial value and reports Saved. for a rename that never happened"
       }
     ]
   },
