@@ -402,7 +402,7 @@
       "action": "-> needs-human"
     }
   ],
-  "resume_at": null,
+  "resume_at": "implement",
   "flow_plan": {
     "kind": "bug",
     "confidence": 85,
@@ -414,7 +414,7 @@
     },
     "decided_at": "2026-10-02T16:22:55.340Z"
   },
-  "stopped_at": null,
+  "stopped_at": "implement",
   "dispatched_stage": "implement",
   "validated_from": "root-cause",
   "validated_at": "2026-10-03T15:11:24.703Z",
