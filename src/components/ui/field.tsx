@@ -33,7 +33,8 @@ export function Field({
   onChange?: (value: string) => void;
   autoComplete?: string;
   required?: boolean;
-  inputMode?: 'text' | 'email' | 'numeric';
+  /** 'decimal' is what a money field asks for: a phone keypad with a decimal separator on it. */
+  inputMode?: 'text' | 'email' | 'numeric' | 'decimal';
   /** docs/ui.md: sign-in and sign-up arrive focused on the email input. */
   autoFocus?: boolean;
   hint?: ReactNode;

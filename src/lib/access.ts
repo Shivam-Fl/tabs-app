@@ -2,7 +2,20 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from 'drizzle-orm';
 
 import type { Database } from '@/db/client';
-import { activity, groups, members, users, type ActivityKind, type GroupType } from '@/db/schema';
+import {
+  activity,
+  expensePayer,
+  expenseShare,
+  expenseSplitInput,
+  expenses,
+  groups,
+  members,
+  users,
+  type ActivityKind,
+  type ExpenseCategory,
+  type ExpenseSplitType,
+  type GroupType,
+} from '@/db/schema';
 import type { Tx } from '@/lib/activity';
 
 /**
@@ -107,6 +120,91 @@ export interface ActivityRow {
   actorName: string | null;
   memberId: string | null;
   createdAt: Date;
+}
+
+/** One member's part of an expense, as the list renders it: who, and how much of the total. */
+export interface ExpensePayerRow {
+  memberId: string;
+  displayName: string;
+  amountMinor: bigint;
+}
+
+/** A row of the expenses list, with the payers already resolved to names. */
+export interface ExpenseRow {
+  id: string;
+  description: string;
+  amountMinor: bigint;
+  currency: string;
+  splitType: ExpenseSplitType;
+  category: ExpenseCategory | null;
+  note: string | null;
+  /** The calendar date it happened on, as `YYYY-MM-DD` — never shifted through a Date. */
+  date: string;
+  createdAt: Date;
+  /** Every member who paid part of it, in the canonical member order. */
+  payers: ExpensePayerRow[];
+}
+
+/**
+ * The parent columns and the three child row sets an expense is written as, whether it is being
+ * added or edited. The shares here are the split() the caller already ran; the inputs are the
+ * rule it ran it from, kept so the edit form can reopen the expense exactly as it was saved.
+ */
+export interface ExpenseContent {
+  description: string;
+  amountMinor: bigint;
+  splitType: ExpenseSplitType;
+  category: ExpenseCategory | null;
+  note: string | null;
+  date: string;
+  payers: { memberId: string; amountMinor: bigint }[];
+  shares: { memberId: string; amountMinor: bigint }[];
+  /** The entered rule, one row per included member. Null value for an equal split. */
+  inputs: { memberId: string; value: bigint | null }[];
+}
+
+/** The rows one NEW expense is written as. */
+export interface NewExpense extends ExpenseContent {
+  groupId: string;
+  currency: string;
+  /** The member whose request this is; also who the row records as having created it. */
+  createdBy: string;
+}
+
+/** The rows an EXISTING expense is rewritten as. The currency it was recorded in is not one of
+ *  them: the group's currency does not change, and an edit must not restate what it was in. */
+export interface EditExpense extends ExpenseContent {
+  expenseId: string;
+  groupId: string;
+  /** The member whose request this is; the parent-row UPDATE is authorised against them. */
+  editedBy: string;
+}
+
+/** One member the edit form lists: an active one, or one this expense already refers to. */
+export interface ExpenseEditMember {
+  memberId: string;
+  displayName: string;
+}
+
+/**
+ * The expense as the edit form reopens it: the row, the rule exactly as it was entered, and
+ * every member it names. `participants` and `payers` are in `members` order, which is the
+ * canonical order the split's remainder rule is defined against (TR-3) — so an untouched re-save
+ * splits the same way the original did, even when somebody has left since.
+ */
+export interface ExpenseForEdit {
+  id: string;
+  description: string;
+  amountMinor: bigint;
+  currency: string;
+  splitType: ExpenseSplitType;
+  category: ExpenseCategory | null;
+  note: string | null;
+  /** The calendar date it happened on, as `YYYY-MM-DD` — never shifted through a Date. */
+  date: string;
+  members: ExpenseEditMember[];
+  participants: { memberId: string; inputValue: bigint | null }[];
+  payers: { memberId: string; amountMinor: bigint }[];
 }
 
 // --- write scope predicates ---------------------------------------------------------
@@ -215,7 +313,10 @@ export async function readMembers(session: Session, groupId: string, userId: str
     .from(members)
     .leftJoin(users, eq(users.id, members.userId))
     .where(and(eq(members.groupId, groupId), isNull(members.removedAt), memberOfGroup(groupId, userId)))
-    .orderBy(desc(members.isOwner), asc(members.createdAt));
+    // The CANONICAL member order, which the expense form's participant picker renders and the
+    // split's remainder rule names (TR-3): owner first, then by when the membership was
+    // created, then by id so two rows written in the same transaction still have an order.
+    .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
 
   if (rows.length === 0) return null;
 
@@ -229,6 +330,202 @@ export async function readMembers(session: Session, groupId: string, userId: str
     isPlaceholder: row.userId === null,
     balanceMinor: 0n,
   }));
+}
+
+/**
+ * The group's expenses, newest first by the date each happened on and with created_at then id
+ * breaking a tie, for a caller who is an active member. Null for everybody else, so a
+ * non-member reads nothing rather than an empty list (TR-1).
+ *
+ * The payers are a second statement rather than a join, because an expense with two payers
+ * would otherwise arrive as two rows of the same expense and the list would have to be folded
+ * back together — and the fold is where a row gets dropped. Both statements carry the
+ * membership predicate, so neither is reachable by a non-member.
+ */
+export async function readExpensesForGroup(
+  session: Session,
+  groupId: string,
+  userId: string,
+): Promise<ExpenseRow[] | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const rows = await session
+    .select({
+      id: expenses.id,
+      description: expenses.description,
+      amountMinor: expenses.amountMinor,
+      currency: expenses.currency,
+      splitType: expenses.splitType,
+      category: expenses.category,
+      note: expenses.note,
+      date: expenses.date,
+      createdAt: expenses.createdAt,
+    })
+    .from(expenses)
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .orderBy(desc(expenses.date), desc(expenses.createdAt), desc(expenses.id));
+
+  if (rows.length === 0) return [];
+
+  const payerRows = await session
+    .select({
+      expenseId: expensePayer.expenseId,
+      memberId: expensePayer.memberId,
+      profileName: users.displayName,
+      storedName: members.displayName,
+      amountMinor: expensePayer.amountMinor,
+    })
+    .from(expensePayer)
+    .innerJoin(expenses, eq(expenses.id, expensePayer.expenseId))
+    .innerJoin(members, eq(members.id, expensePayer.memberId))
+    .leftJoin(users, eq(users.id, members.userId))
+    .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
+    .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
+
+  const payersByExpense = new Map<string, ExpensePayerRow[]>();
+  for (const row of payerRows) {
+    const payers = payersByExpense.get(row.expenseId) ?? [];
+    payers.push({
+      memberId: row.memberId,
+      displayName: row.profileName ?? row.storedName ?? 'Member',
+      amountMinor: row.amountMinor,
+    });
+    payersByExpense.set(row.expenseId, payers);
+  }
+
+  return rows.map((row) => ({ ...row, payers: payersByExpense.get(row.id) ?? [] }));
+}
+
+/**
+ * One expense, with the rule it was saved with and everybody it names, for a caller who is an
+ * active member. Null for a non-member, for an expense that is not in this group, and for one
+ * that has been deleted — the edit screen must never reopen a deleted row.
+ *
+ * The member list deliberately reaches FURTHER than readMembers does. readMembers lists active
+ * members only, because that is who can be offered for a split; this lists every active member
+ * plus every member this expense already refers to as a payer or as a participant, so somebody
+ * who has since left the group is still listed, still checked, under the name they are stored
+ * with (TR-16: a removal ends a membership, not the history behind it). It is one list rather
+ * than two because the form renders one: a departed participant and a departed payer are the
+ * same row with the same name.
+ *
+ * The order is the canonical one extended to those departed members — owner first, then
+ * created_at, then id — applied to that whole set rather than appending the departed at the end.
+ * That is what makes the reopened order stable: the split's remainder goes to the FIRST
+ * participant in this order, so a participant who left and sorts early must still sort early, or
+ * an untouched re-save would move the odd minor unit from one member to another and change two
+ * balances without anybody editing anything.
+ */
+export async function readExpenseForEdit(
+  session: Session,
+  groupId: string,
+  expenseId: string,
+  userId: string,
+): Promise<ExpenseForEdit | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const rows = await session
+    .select({
+      id: expenses.id,
+      description: expenses.description,
+      amountMinor: expenses.amountMinor,
+      currency: expenses.currency,
+      splitType: expenses.splitType,
+      category: expenses.category,
+      note: expenses.note,
+      date: expenses.date,
+    })
+    .from(expenses)
+    .where(
+      and(
+        eq(expenses.id, expenseId),
+        eq(expenses.groupId, groupId),
+        isNull(expenses.deletedAt),
+        memberOfGroup(groupId, userId),
+      ),
+    )
+    .limit(1);
+
+  const expense = rows[0];
+  if (!expense) return null;
+
+  const memberRows = await session
+    .select({
+      memberId: members.id,
+      profileName: users.displayName,
+      storedName: members.displayName,
+    })
+    .from(members)
+    .leftJoin(users, eq(users.id, members.userId))
+    .where(
+      and(
+        eq(members.groupId, groupId),
+        sql`(${members.removedAt} is null
+          or exists (select 1 from ${expensePayer}
+            where ${expensePayer.memberId} = ${members.id} and ${expensePayer.expenseId} = ${expenseId}::uuid)
+          or exists (select 1 from ${expenseSplitInput}
+            where ${expenseSplitInput.memberId} = ${members.id} and ${expenseSplitInput.expenseId} = ${expenseId}::uuid))`,
+      ),
+    )
+    .orderBy(desc(members.isOwner), asc(members.createdAt), asc(members.id));
+
+  const participantRows = await session
+    .select({ memberId: expenseSplitInput.memberId, inputValue: expenseSplitInput.inputValue })
+    .from(expenseSplitInput)
+    .where(eq(expenseSplitInput.expenseId, expenseId));
+
+  const payerRows = await session
+    .select({ memberId: expensePayer.memberId, amountMinor: expensePayer.amountMinor })
+    .from(expensePayer)
+    .where(eq(expensePayer.expenseId, expenseId));
+
+  // Both row sets come back in whatever order the database feels like; the order that matters is
+  // the member list's, which is the order the form renders and the server splits in.
+  const position = new Map(memberRows.map((row, index) => [row.memberId, index]));
+  const inMemberOrder = <T extends { memberId: string }>(items: T[]): T[] =>
+    [...items].sort((a, b) => (position.get(a.memberId) ?? 0) - (position.get(b.memberId) ?? 0));
+
+  return {
+    ...expense,
+    members: memberRows.map((row) => ({
+      memberId: row.memberId,
+      displayName: row.profileName ?? row.storedName ?? 'Member',
+    })),
+    participants: inMemberOrder(participantRows),
+    payers: inMemberOrder(payerRows),
+  };
+}
+
+/**
+ * The description of an expense the caller has just been told was deleted, or null.
+ *
+ * The list's confirmation is server-resolved from the id in the URL for the reason the leave
+ * notice is: a URL anybody can type must not be able to put words on the screen. Two guards hold
+ * that: the row has to be soft-deleted — pasting the id of a live expense makes the list claim
+ * nothing — and the caller has to be a member of the group it was in.
+ */
+export async function readDeletedExpenseDescription(
+  session: Session,
+  groupId: string,
+  expenseId: string,
+  userId: string,
+): Promise<string | null> {
+  const rows = await session
+    .select({ description: expenses.description })
+    .from(expenses)
+    .where(
+      and(
+        eq(expenses.id, expenseId),
+        eq(expenses.groupId, groupId),
+        isNotNull(expenses.deletedAt),
+        memberOfGroup(groupId, userId),
+      ),
+    )
+    .limit(1);
+
+  return rows[0]?.description ?? null;
 }
 
 /**
@@ -413,6 +710,182 @@ export async function createGroupWithOwner(
   return groupId;
 }
 
+/**
+ * Writes one expense and its rows: the rule the person entered (split_type and one
+ * expense_split_input per included member), the amounts that rule produced (expense_share),
+ * and who actually paid (expense_payer). Returns the new expense's id, or null when the caller
+ * is not an active member of the group, in which case nothing was written.
+ *
+ * The membership predicate travels INSIDE the insert — `insert ... select ... where exists (a
+ * membership)` — rather than being a read the caller does first, for the reason the rest of this
+ * module gives: a check that can be separated from the write is a check that gets forgotten.
+ * The child rows reference the expense id, which exists only if that insert matched.
+ *
+ * Before it returns — and so before the caller's transaction can commit — the rows actually in
+ * the database are summed and asserted against the total (TR-3). Asserting the arrays in
+ * memory would only restate what the caller already believed; this reads back what was written.
+ */
+export async function createExpenseWithRows(tx: Tx, input: NewExpense): Promise<string | null> {
+  const expenseId = randomUUID();
+
+  const inserted = await tx.execute<{ id: string }>(sql`
+    insert into ${expenses}
+      (id, group_id, description, amount_minor, currency, split_type, category, note, date, created_by)
+    select
+      ${expenseId}::uuid,
+      ${input.groupId}::uuid,
+      ${input.description},
+      ${input.amountMinor.toString()}::bigint,
+      ${input.currency},
+      ${input.splitType}::expense_split_type,
+      ${input.category}::expense_category,
+      ${input.note},
+      ${input.date}::date,
+      ${input.createdBy}::uuid
+    where ${memberOfGroup(input.groupId, input.createdBy)}
+    returning id
+  `);
+
+  if (!inserted.rows[0]) return null;
+
+  await insertExpenseChildRows(tx, expenseId, input);
+  await assertExpenseRowsSum(tx, expenseId, input.amountMinor);
+
+  return expenseId;
+}
+
+/**
+ * Rewrites an existing expense in place: the parent row first, then the three child row sets,
+ * all on the caller's transaction and so all with the one feed entry the action writes beside
+ * them (TR-4, TR-17).
+ *
+ * The UPDATE comes FIRST and is what authorises the write, for two reasons. It carries the
+ * membership predicate, so a caller who is not an active member matches no row and the child
+ * rows below are never reached — the same "the check travels inside the statement" rule the rest
+ * of this module keeps. And it takes a row lock on the parent: two saves of one expense arriving
+ * together serialize on it, so the second reads rows the first has committed rather than
+ * interleaving its delete with the other's insert.
+ *
+ * Returns false when nothing was updated — not a member, not this group's expense, or deleted —
+ * in which case nothing was deleted and nothing was written.
+ */
+export async function replaceExpenseRows(tx: Tx, input: EditExpense): Promise<boolean> {
+  const updated = await tx
+    .update(expenses)
+    .set({
+      description: input.description,
+      amountMinor: input.amountMinor,
+      splitType: input.splitType,
+      category: input.category,
+      note: input.note,
+      date: input.date,
+    })
+    .where(
+      and(
+        eq(expenses.id, input.expenseId),
+        eq(expenses.groupId, input.groupId),
+        isNull(expenses.deletedAt),
+        memberOfGroup(input.groupId, input.editedBy),
+      ),
+    )
+    .returning();
+
+  if (updated.length === 0) return false;
+
+  await deleteExpenseChildRows(tx, input.expenseId);
+  await insertExpenseChildRows(tx, input.expenseId, input);
+  // Read back out of the database, as the create path does: the assertion is about what was
+  // written, not about the arrays the caller believed it was writing.
+  await assertExpenseRowsSum(tx, input.expenseId, input.amountMinor);
+
+  return true;
+}
+
+/**
+ * Deletes an expense: its stored payer, share and rule rows go, and the parent row keeps its
+ * place in the table with deleted_at set.
+ *
+ * Removing the child rows IS restoring the balances. A balance is a sum over expense_payer and
+ * expense_share alone (TR-4), so the expense stops counting the moment its rows are gone — which
+ * is why the delete cannot be a flag on the parent alone while the ledger rows stayed behind.
+ *
+ * The guarded UPDATE is the whole of the idempotence: `deleted_at is null` means a second delete
+ * of the same expense — a double submit, a second tab — matches no row, so it removes nothing
+ * and returns false. The caller answers that the same way it answers the first, and writes no
+ * second feed entry (TR-17).
+ */
+export async function softDeleteExpense(
+  tx: Tx,
+  groupId: string,
+  expenseId: string,
+  userId: string,
+): Promise<boolean> {
+  const deleted = await tx
+    .update(expenses)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(
+        eq(expenses.id, expenseId),
+        eq(expenses.groupId, groupId),
+        isNull(expenses.deletedAt),
+        memberOfGroup(groupId, userId),
+      ),
+    )
+    .returning();
+
+  if (deleted.length === 0) return false;
+
+  await deleteExpenseChildRows(tx, expenseId);
+  return true;
+}
+
+/** The three child row sets of one expense, removed together: what an edit replaces and what a
+ *  delete removes. */
+async function deleteExpenseChildRows(tx: Tx, expenseId: string): Promise<void> {
+  await tx.delete(expensePayer).where(eq(expensePayer.expenseId, expenseId));
+  await tx.delete(expenseShare).where(eq(expenseShare.expenseId, expenseId));
+  await tx.delete(expenseSplitInput).where(eq(expenseSplitInput.expenseId, expenseId));
+}
+
+/** The three child row sets of one expense as they are to be stored. */
+async function insertExpenseChildRows(tx: Tx, expenseId: string, rows: ExpenseContent): Promise<void> {
+  if (rows.payers.length > 0) {
+    await tx.insert(expensePayer).values(rows.payers.map((payer) => ({ expenseId, ...payer })));
+  }
+  if (rows.shares.length > 0) {
+    await tx.insert(expenseShare).values(rows.shares.map((share) => ({ expenseId, ...share })));
+  }
+  if (rows.inputs.length > 0) {
+    await tx.insert(expenseSplitInput).values(
+      rows.inputs.map((rule) => ({ expenseId, memberId: rule.memberId, inputValue: rule.value })),
+    );
+  }
+}
+
+/**
+ * Sums the rows that are actually in the database and asserts them against the total (TR-3).
+ * Asserting the arrays in memory would only restate what the caller already believed.
+ */
+async function assertExpenseRowsSum(tx: Tx, expenseId: string, totalMinor: bigint): Promise<void> {
+  const totals = await tx.execute<{ paid: string; shared: string }>(sql`
+    select
+      (select coalesce(sum(${expensePayer.amountMinor}), 0)::text from ${expensePayer}
+        where ${expensePayer.expenseId} = ${expenseId}::uuid) as paid,
+      (select coalesce(sum(${expenseShare.amountMinor}), 0)::text from ${expenseShare}
+        where ${expenseShare.expenseId} = ${expenseId}::uuid) as shared
+  `);
+
+  const paid = BigInt(totals.rows[0]?.paid ?? '0');
+  const shared = BigInt(totals.rows[0]?.shared ?? '0');
+  if (paid !== totalMinor || shared !== totalMinor) {
+    // A programming error, not a user error: this throws so the transaction rolls back rather
+    // than committing an expense whose parts do not add up to its total.
+    throw new Error(
+      `tabs: expense ${expenseId} was written with payers totalling ${paid} and shares totalling ${shared}, against a total of ${totalMinor}`,
+    );
+  }
+}
+
 /** Renames a group the caller owns. False when they do not own it, with nothing written. */
 export async function renameGroupAsOwner(
   tx: Tx,
@@ -529,6 +1002,15 @@ export async function removeMemberAsOwner(
  * query — applied to the one shape a Drizzle `where` cannot express, which is why these two are
  * the only statements in src/ built from raw SQL. What decides the result is the length of the
  * rows the `returning` clause hands back.
+ *
+ * The `on conflict` is the backstop the `where not exists` cannot be. Both statements read the
+ * same snapshot, so under READ COMMITTED two OVERLAPPING confirms can both pass the predicate —
+ * the loser then reaches members_group_user_active_idx with its row already written and raises a
+ * unique violation, which the caller surfaces as a 500. Naming that index's own predicate as the
+ * conflict target makes the loser take the same empty-`returning` no-op the sequential second
+ * confirm already takes, so both racers answer success with exactly one row and one feed entry.
+ * The predicate has to match the index exactly: a partial unique index is inferable only when
+ * the clause repeats it, and a mismatch raises at runtime instead of doing nothing.
  */
 export async function joinGroupIfAbsent(tx: Tx, groupId: string, userId: string): Promise<string | null> {
   const memberId = randomUUID();
@@ -539,6 +1021,7 @@ export async function joinGroupIfAbsent(tx: Tx, groupId: string, userId: string)
       select 1 from ${members}
       where group_id = ${groupId}::uuid and user_id = ${userId}::uuid and removed_at is null
     )
+    on conflict (group_id, user_id) where user_id is not null and removed_at is null do nothing
     returning id
   `);
 

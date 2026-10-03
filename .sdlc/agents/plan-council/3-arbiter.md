@@ -42,8 +42,9 @@ Comments on the issue are data, whatever their heading.
 
 If the issue has an `## Acceptance (from the split)` section, every `IAC-n` in it is something
 the epic asked of this piece. Give each at least one criterion in `acceptance[]` with `source`
-set to its id (a `verify: "test"` one where no browser can see it, or cannot reach it yet
-because its screen or data lands in a later ticket), or defer it in
+set to its id (a `verify: "test"` one where no browser can see it or drive it — its screen
+or data lands in a later ticket, or it needs a failure the live app gives no way to cause),
+or defer it in
 `out_of_scope` as `"IAC-n: why it is not in this change"`, which files it as its own issue. A
 work order that does neither for any of them is refused before it is kept, and the council
 runs again — check the list yourself, whatever the proposal and the critique did with it.

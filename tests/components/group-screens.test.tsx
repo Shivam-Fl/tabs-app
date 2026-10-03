@@ -273,4 +273,18 @@ describe('the home list', () => {
     expect(screen.getByText('You left Lisbon · Undo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
   });
+
+  it('shows the notice above the empty state when the group left was the only one', () => {
+    // The second person in a fresh group leaves — the acceptance criterion's own walkthrough —
+    // so the list is empty and the home screen renders HomeEmpty. The notice has to survive that
+    // branch: it is the only Undo affordance for the leave, and leaving it to the list branch
+    // hides it for exactly the person the notice was written for.
+    const { container } = render(<GroupList groups={[]} leftGroupId={group.id} leftGroupName="Lisbon" />);
+
+    expect(screen.getByText('You left Lisbon · Undo')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: "You're not in any groups yet." })).toBeInTheDocument();
+    // HomeEmpty contributes the branch's single h1, and the notice contributes none.
+    expect(h1s(container)).toHaveLength(1);
+  });
 });

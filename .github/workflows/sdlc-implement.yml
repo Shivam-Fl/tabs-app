@@ -278,6 +278,12 @@ jobs:
       - name: Check out the issue branch
         run: |
           cp .sdlc/agents/implementer.md "$RUNNER_TEMP/implementer.md"
+          # The paths no agent may change, ignored while untracked. A tool that writes one on its
+          # own — `next dev` writes AGENTS.md and CLAUDE.md when it detects an agent, and their text
+          # says to commit them — no longer lands in a `git add -A`, the agent's or the bundle's
+          # (tabs-app PR #31 stopped on exactly that). A tracked one changed, or one added with -f,
+          # is still the diff guard's to refuse. Read from this checkout, the default branch's.
+          node -e "import('./.sdlc/bin/lib/detect.js').then((m) => console.log(m.RESERVED.join('\\n')))" >> .git/info/exclude
           if [ "$FRESH" != "true" ] && git rev-parse -q --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
             git checkout -B "$BRANCH" "origin/$BRANCH"
           else

@@ -149,12 +149,14 @@ in three weeks.
 - `acceptance[]` must be **observable in a browser**. The QA agent has to verify each one
   against a live URL, so "the cookie is set correctly" is useless and "after login, reloading
   keeps the user menu visible" is testable. The exception is what no browser can see — a
-  nightly retention job, a latency budget, a migration — **and what no browser can reach yet**:
-  a rule whose screen, or the data to get there, lands in a later ticket. Before you write a
-  `browser` criterion, walk its path in the code as it will be after THIS change: every page,
-  control and fixture it needs must exist by then. Where one does not, set `verify: "test"`
-  and name, in `how_to_verify`, the `tests[]` case CI runs that proves it, and the ticket that
-  brings the browser path (`verify: "api"` when QA can call the deployed API). A requirement is
+  nightly retention job, a latency budget, a migration — **and what no browser can drive**: a
+  screen, or the data to reach it, that lands in a later ticket; a failure the live app gives
+  no way to cause (one read failing while the others succeed, a provider timing out); a wait
+  QA cannot sit through. Before you write a `browser` criterion, walk its path in the code as
+  it will be after THIS change, from the live URL: every page, control, fixture and trigger it
+  needs must exist by then. Where one does not, set `verify: "test"` and name, in
+  `how_to_verify`, the `tests[]` case CI runs that proves it — and, for a later screen, the
+  ticket that brings it (`verify: "api"` when QA can call the deployed API). A requirement is
   never dropped because it is not visual, nor because its screen is not built yet.
 - **If the issue has an `## Acceptance (from the split)` section**, every `IAC-n` in it is
   something the epic asked of this piece. Give each at least one criterion with `source` set

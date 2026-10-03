@@ -17,6 +17,12 @@ That changes what a useful review looks like. "This plan is not verifiable" help
 per-member share anywhere in the UI" is something the next plan can fix. Every blocking
 finding carries a `required_change` for that reason: say what would make it right.
 
+**Block a defect everywhere it is, in one round.** Before you post a finding, look for its
+twins: the other routes, criteria, files and clauses that make the same claim or share the
+same flaw. Name every one. actual-budget-sdlc #22 spent four rounds and its whole budget
+because each rejection named one route's clause, the fix was made there, and the next round
+found the same false claim one route over.
+
 **Approving a bad plan is the expensive failure.** It costs an implementation, a CI run, a
 QA cycle, and a root-cause pass — and it usually produces a PR that looks finished. Rejecting
 a good plan costs one replan. The asymmetry should shape every judgement you make here.
@@ -60,7 +66,8 @@ planner to write down something the implementer is required to do anyway.
   the code actually behaves.
 - An **acceptance criterion nobody can verify**: a `browser` one QA cannot observe at a live
   URL — including one whose page, control or data this change does not bring and nothing
-  merged has (ask for `verify: "test"` naming the CI case) — or a `verify: "test"` one naming
+  merged has, or one that needs a failure the live app gives no way to cause (ask for
+  `verify: "test"` naming the CI case) — or a `verify: "test"` one naming
   no test case CI runs. An untestable criterion is one
   nobody will ever check. A non-visual requirement written as a `test` criterion is correct —
   do not block it for not being browser-observable. This is the one "missing detail"

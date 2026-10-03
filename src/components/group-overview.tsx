@@ -2,7 +2,7 @@ import Link from 'next/link';
 
 import type { ActivityRow, GroupRow, MemberRow } from '@/lib/access';
 import { formatMinor } from '@/lib/money';
-import { Money } from '@/components/ui';
+import { LinkButton, Money } from '@/components/ui';
 
 /**
  * The group overview's body.
@@ -82,9 +82,17 @@ export function GroupOverview({
         )}
       </section>
 
-      {/* The secondary action row ships with Members only: Add expense, Balances and Activity
-          each arrive with their own screen in #6, #8 and #10. */}
+      {/* docs/ui.md's secondary action row: Add expense is the primary action and the rest are
+          links. Balances and Activity join them with their own screens in #8 and #10; the
+          Expenses link is here because the list is otherwise reachable only through the form. */}
       <nav aria-label="Group" className="flex flex-wrap gap-space-2">
+        <LinkButton href={`/groups/${group.id}/expenses/new`}>Add expense</LinkButton>
+        <Link
+          href={`/groups/${group.id}/expenses`}
+          className="inline-flex min-h-[44px] items-center rounded-radius border border-border bg-surface px-space-4 font-medium"
+        >
+          Expenses
+        </Link>
         <Link
           href={`/groups/${group.id}/members`}
           className="inline-flex min-h-[44px] items-center rounded-radius border border-border bg-surface px-space-4 font-medium"
@@ -117,6 +125,13 @@ function describe(entry: ActivityRow): string {
     'member.removed': 'was removed from the group',
     'member.placeholder_added': 'was added to the group by name',
     'member.claimed': 'claimed their place in the group',
+    // The subject and detail the entry carries are not rendered here: the feed screens of #8
+    // read them. Until then this line says what happened without repeating the amount, which
+    // the overview does not otherwise show for an expense. An edit whose detail is empty says
+    // "edited an expense" and nothing more, which is exactly what was recorded.
+    'expense.added': 'added an expense',
+    'expense.edited': 'edited an expense',
+    'expense.deleted': 'deleted an expense',
   };
   return `${who} ${what[entry.kind]}`;
 }
