@@ -17,7 +17,13 @@ import { Button, Dialog } from '@/components/ui';
 
 function useMemberAction(
   action: (previous: MemberResult | null, formData: FormData) => Promise<MemberResult>,
-  onSuccess: (groupId: string | undefined) => void,
+  /**
+   * Optional, and only for a caller that NAVIGATES on success. Leaving does, and it has to run
+   * from the continuation rather than from an effect on the state — see the note below. A caller
+   * that stays on the screen leaves this out and reacts to the committed state instead, which is
+   * what orders its confirmation before the refresh it dispatches.
+   */
+  onSuccess?: (groupId: string | undefined) => void,
 ) {
   const formRef = useRef<HTMLFormElement>(null);
   const [open, setOpen] = useState(false);
@@ -44,7 +50,7 @@ function useMemberAction(
    */
   const wrapped = async (previous: MemberResult | null, formData: FormData) => {
     const result = await action(previous, formData);
-    if (result.ok) onSuccessRef.current(result.groupId);
+    if (result.ok) onSuccessRef.current?.(result.groupId);
     return result;
   };
 
@@ -97,13 +103,41 @@ export function RemoveButton({
   memberName: string;
 }) {
   const router = useRouter();
-  const { formRef, open, setOpen, state, formAction, pending } = useMemberAction(removeMember, () => {
-    // No navigation: the removal happened on this screen, so this screen is where it shows — the
-    // confirmation below lands the moment the action resolves, and the refresh drops the row
-    // from the server-rendered list underneath it.
-    router.refresh();
-  });
+  // No success callback: a removal happens on this screen, so this screen is where it shows and
+  // nothing here navigates. The refresh is dispatched from the committed state below.
+  const { formRef, open, setOpen, state, formAction, pending } = useMemberAction(removeMember);
+  const announced = useRef(false);
+  // Derived from the committed state, NOT held separately and set from the effect below. This is
+  // what puts the confirmation in the DOM strictly before the refresh is dispatched: it renders
+  // in the very commit that delivers the ok state, and the effect that refreshes runs after that
+  // commit — so there is no render between them in which the status could be missing.
   const removed = Boolean(state?.ok);
+
+  /**
+   * The refresh is dispatched from an effect on the committed state rather than from inside the
+   * wrapped action, so it cannot fire before the ok state has rendered: the confirmation is in
+   * the document by the time this runs, and `router.refresh()` is an asynchronous round trip that
+   * cannot resolve before it. It mirrors ArchiveButton — the same once-guarded effect.
+   *
+   * Necessary, and NOT sufficient, and this is worth writing down rather than leaving the next
+   * reader to rediscover it. Measured on a production build with a MutationObserver over the
+   * members page, deleting `router.refresh()` from this component entirely still removes the row
+   * and still never inserts the role=status paragraph. The row goes because `removeMember`'s own
+   * `revalidatePath('/', 'layout')` ships the re-rendered members page back WITH the action
+   * result, and React commits that in the same commit as the ok state — unmounting this control
+   * before its confirmation can ever be a node. What makes the confirmation observable is
+   * dropping that revalidation, which is a change to src/app/actions/members.ts, not to this file.
+   * See the implementer note on issue #20.
+   */
+  useEffect(() => {
+    // Once: the result object is what this reacts to, and it stays the same across renders.
+    if (!state?.ok || announced.current) return;
+    announced.current = true;
+    // Belt and braces: the action's own revalidation has usually already refreshed the list, but
+    // refetching the route here costs one request and leaves the screen correct even if it has
+    // not. The confirmation stays committed until the row goes with it either way.
+    router.refresh();
+  }, [state, router]);
 
   return (
     <>

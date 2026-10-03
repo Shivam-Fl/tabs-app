@@ -88,6 +88,33 @@ describe('a real screen composition', () => {
     }
   });
 
+  it('gives two Fields with the same name two inputs, each named by one label only', () => {
+    const { container } = render(
+      <form>
+        <Field name="name" label="Name" />
+        <Field name="name" label="Group name" />
+      </form>,
+    );
+
+    const inputs = [...container.querySelectorAll('input')];
+    const labels = [...container.querySelectorAll('label')];
+    expect(inputs).toHaveLength(2);
+
+    // Two controls sharing one id is what a `<label for>` resolves through, and the members page
+    // renders exactly this pair — the rename form's field beside the add-a-member form's. They
+    // used to share the id `field-name`, so the "Group name" label named the placeholder's input:
+    // what somebody typed went into the wrong box, and Save submitted the rename form's own
+    // untouched value while reporting 'Saved.'.
+    expect(inputs[0]?.id).not.toBe(inputs[1]?.id);
+
+    for (const [index, text] of ['Name', 'Group name'].entries()) {
+      const input = screen.getByLabelText(text);
+      expect(input).toBe(inputs[index]);
+      // The label that names it names ONLY it — the whole point of the id being per instance.
+      expect(labels.filter((label) => label.htmlFor === input.id)).toHaveLength(1);
+    }
+  });
+
   it('associates a field error with its input through aria-describedby, and never by red alone', () => {
     const { container } = render(<Field name="email" label="Email" error="Enter a valid email address." />);
 

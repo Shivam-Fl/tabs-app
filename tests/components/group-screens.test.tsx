@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { archiveGroup, renameGroup } from '@/app/actions/groups';
 import { removeMember } from '@/app/actions/members';
+import type { MemberResult } from '@/app/actions/members';
 import { GroupList } from '@/components/group-list';
 import { GroupOverview } from '@/components/group-overview';
 import { MembersScreen } from '@/components/members-screen';
@@ -38,8 +39,10 @@ vi.mock('next/navigation', () => ({
 afterEach(cleanup);
 
 beforeEach(() => {
-  router.push.mockClear();
-  router.refresh.mockClear();
+  // Reset, not merely clear: a case that installs an implementation to observe what the DOM held
+  // when the refresh was dispatched must not leave it on for the next one.
+  router.push.mockReset();
+  router.refresh.mockReset();
 });
 
 const group: GroupRow = {
@@ -83,6 +86,11 @@ const summaries: GroupSummary[] = [{ id: group.id, name: 'Lisbon', type: 'trip',
 
 function h1s(container: HTMLElement): Element[] {
   return [...container.querySelectorAll('h1')];
+}
+
+/** Let every pending microtask and timer-less continuation settle before asserting a negative. */
+function settle() {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 describe('the group overview', () => {
@@ -186,6 +194,77 @@ describe('the members screen', () => {
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('names the rename form’s own field, so Save submits what is visible in it', () => {
+    const { container } = render(<MembersScreen group={group} members={[owner]} viewer={ownerView} invite={invite} />);
+
+    // The owner's members page renders two fields named `name`: the rename form's and "Add a
+    // member by name"'s. Field built its id from the name alone, so both inputs carried
+    // id="field-name" and the rename label's `for` resolved to whichever the document listed
+    // first — the placeholder's. QA filled the field the label names and watched the Server
+    // Action post the rename form's own INITIAL value, with a false 'Saved.' beside it.
+    const rename = screen.getByLabelText('Group name');
+    const placeholder = screen.getByLabelText('Name');
+    expect(rename).not.toBe(placeholder);
+    // The rename field shows the group as it is now; the placeholder field starts empty.
+    expect(rename).toHaveValue('Lisbon');
+    expect(placeholder).toHaveValue('');
+
+    const labels = [...container.querySelectorAll('label')];
+    expect(labels.filter((label) => label.htmlFor === rename.id)).toHaveLength(1);
+    expect(labels.filter((label) => label.htmlFor === placeholder.id)).toHaveLength(1);
+  });
+
+  it('has the confirmation in the document at the moment it dispatches the refresh', async () => {
+    vi.mocked(removeMember).mockResolvedValue({ ok: true, groupId: group.id });
+    // What the DOM held at the moment the refresh was dispatched. This is the ordering a
+    // jsdom test CAN see: refreshing from the committed state puts the status in the document
+    // before the round trip is asked for, whereas refreshing from the wrapped action's awaited
+    // continuation asks for it before useActionState has committed anything.
+    //
+    // It is not the whole of AC-6, and this test cannot be read as if it were: what actually
+    // keeps the role=status node from ever existing is the Server Action's own revalidated
+    // response arriving in the same commit as the ok state, which unmounts this control. That is
+    // only observable in a browser — see the implementer note on issue #20.
+    const confirmedWhenRefreshed: (HTMLElement | null)[] = [];
+    router.refresh.mockImplementation(() => {
+      confirmedWhenRefreshed.push(screen.queryByText('Removed Sam.'));
+    });
+
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove Sam' }));
+
+    await waitFor(() => expect(router.refresh).toHaveBeenCalledTimes(1));
+    expect(confirmedWhenRefreshed[0]).not.toBeNull();
+    expect(confirmedWhenRefreshed[0]).toHaveTextContent('Removed Sam.');
+  });
+
+  it('refreshes only once the removal has committed, never while it is in flight', async () => {
+    let resolveRemove: ((result: MemberResult) => void) | undefined;
+    vi.mocked(removeMember).mockImplementation(
+      () =>
+        new Promise<MemberResult>((resolve) => {
+          resolveRemove = resolve;
+        }),
+    );
+
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+    fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove Sam' }));
+
+    await waitFor(() => expect(removeMember).toHaveBeenCalledTimes(1));
+    await settle();
+    // In flight: there is no committed result yet, so there is nothing to confirm and nothing to
+    // refresh for.
+    expect(screen.queryByText('Removed Sam.')).not.toBeInTheDocument();
+    expect(router.refresh).not.toHaveBeenCalled();
+
+    resolveRemove?.({ ok: true, groupId: group.id });
+
+    await waitFor(() => expect(screen.getByText('Removed Sam.')).toHaveAttribute('role', 'status'));
+    expect(router.refresh).toHaveBeenCalledTimes(1);
   });
 
   it('confirms a removal in place and refreshes the list, leaving no live Remove button', async () => {

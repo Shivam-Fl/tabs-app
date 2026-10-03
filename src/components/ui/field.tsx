@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import type { ReactNode } from 'react';
 
 import { Input } from './input';
@@ -39,7 +40,19 @@ export function Field({
   autoFocus?: boolean;
   hint?: ReactNode;
 }) {
-  const id = `field-${name}`;
+  /**
+   * The id is unique per Field INSTANCE, not per field name. `field-${name}` collides the moment
+   * one screen renders two fields with the same name — the members page renders the rename form's
+   * `name` beside the add-a-member form's — and a `<label for>` resolves to whichever of the two
+   * the document lists first. The rename label therefore named the placeholder's input: what
+   * somebody typed went into the wrong box, and Save submitted the rename form's own untouched
+   * value while reporting 'Saved.'.
+   *
+   * useId is React's own per-instance identifier and is stable across a server render and the
+   * hydration of it, which the alternative — a counter, or Math.random — is not.
+   */
+  const generated = useId();
+  const id = `field-${generated}`;
   return (
     <div className="flex flex-col gap-space-1">
       <Input
