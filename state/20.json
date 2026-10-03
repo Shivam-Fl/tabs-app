@@ -449,8 +449,8 @@
     ]
   },
   "qa": {
-    "verdict": "blocked",
-    "introduced_bugs": 0,
+    "verdict": "fail",
+    "introduced_bugs": 1,
     "ac_ids": [
       "AC-1",
       "AC-2",
@@ -458,10 +458,15 @@
       "AC-4",
       "AC-5"
     ],
-    "sha": "90431561ee9bfe1669cdff649315fe6b5a97f8ee",
-    "run_id": "37046357641",
+    "sha": "931d6c560170d1e2df8551ae407eb319de57e867",
+    "run_id": "37129753741",
     "work_order_version": 1,
-    "at": "2026-10-02T18:44:24.867Z"
+    "at": "2026-10-03T15:07:07.834Z"
   },
-  "qa_open_bugs": []
+  "qa_open_bugs": [
+    {
+      "id": "BUG-2",
+      "title": "Removal confirmation only sometimes reaches the DOM before the refresh unmounts the row"
+    }
+  ]
 }
