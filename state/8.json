@@ -513,7 +513,28 @@
   "implemented_version": 1,
   "follow_ups": {
     "review": [],
-    "pr": "31"
+    "pr": "31",
+    "qa": [
+      {
+        "actual": "Direct GET /groups/<id>, /groups/<id>/balances and /groups/<id>/members as a signed-in non-member returns HTTP 200 with the body 'This group isn't available.' No group data leaks (verified), but the status is 200, not 404. Identical on the pre-existing overview route, so it is framework serving behavior, not this PR's doing.",
+        "evidence": [
+          "/home/runner/work/tabs-app/tabs-app/qa-evidence/test-results/guards-T-7-signed-out-call-3f4ff--members-get-the-404-screen-chromium/trace.zip"
+        ],
+        "expected": "A request for a group the caller cannot see answers 404 (the notFound() contract every guarded page in this route group relies on).",
+        "id": "BUG-1",
+        "introduced_by_pr": false,
+        "repro": [
+          "Sign up as user A, create a group, note its id.",
+          "Sign up as user B in a fresh context (never invited, never joined).",
+          "As B, GET /groups/<id>/balances directly.",
+          "Observe HTTP 200 with the not-found screen instead of HTTP 404."
+        ],
+        "reproducible": "always",
+        "severity": "minor",
+        "suspected_cause": "Next.js serves the route-group notFound() boundary with a 200 status on these pages; observed identically on the pre-existing overview route and the new balances route, so the status comes from the serving path rather than from anything this PR added.",
+        "title": "Guarded group routes render the not-found screen with HTTP 200 instead of 404"
+      }
+    ]
   },
   "qa": {
     "verdict": "fail",
