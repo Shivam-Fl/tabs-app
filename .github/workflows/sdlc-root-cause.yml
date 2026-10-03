@@ -312,7 +312,9 @@ jobs:
             If previous-output.json exists, your previous work order for this issue was
             refused: the file holds it and why — the validator's errors, or the plan reviewer's
             objections (those start "the plan reviewer rejected this revision"). Answer each one
-            and keep the rest — do not start over.
+            and keep the rest — do not start over. Fix each defect everywhere it occurs, not only
+            in the clause quoted: the same claim on a sibling route, criterion or file is the
+            next rejection if you leave it.
 
             You have no token that can post, label, push or dispatch, and that is deliberate:
             work-order.json or stop.json in the repository root is your whole output, and a
@@ -415,7 +417,9 @@ jobs:
             If previous-output.json exists, your previous work order for this issue was
             refused: the file holds it and why — the validator's errors, or the plan reviewer's
             objections (those start "the plan reviewer rejected this revision"). Answer each one
-            and keep the rest — do not start over.
+            and keep the rest — do not start over. Fix each defect everywhere it occurs, not only
+            in the clause quoted: the same claim on a sibling route, criterion or file is the
+            next rejection if you leave it.
 
             You have no token that can post, label, push or dispatch, and that is deliberate:
             work-order.json or stop.json in the repository root is your whole output, and a

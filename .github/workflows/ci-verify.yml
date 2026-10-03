@@ -277,6 +277,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      actions: read           # whether a newer run replaced a cancelled one
       pull-requests: write
       statuses: write
     steps:
@@ -297,6 +298,19 @@ jobs:
           if [ -n "$OWNER" ] && [ "$OWNER" != "$RUN_URL" ]; then
             echo "ci-verify on $SHA belongs to $OWNER now — leaving it"
             exit 0
+          fi
+          # Cancelled because a newer ci-verify replaced this one (the concurrency group): that run
+          # owns the verdict. Posting "failure: cancelled" here landed in the seconds before it posted
+          # its own pending, and the gate read a red CI that never ran (tabs-app PR #21) — and
+          # stopped for a person with no error to hand anyone. A cancel nothing replaced (a person,
+          # a timeout) is still a failure.
+          if [ "$RESULT" = cancelled ]; then
+            NEWER=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci-verify.yml/runs?per_page=30" \
+              --jq "[.workflow_runs[] | select(.id > $GITHUB_RUN_ID and .status != \"completed\")] | length" || echo 0)
+            if [ "${NEWER:-0}" -gt 0 ]; then
+              echo "cancelled by a newer ci-verify run — it reports on $SHA, not this one"
+              exit 0
+            fi
           fi
           case "$RESULT" in
             success)   STATE=success; DESC="all configured checks passed" ;;
