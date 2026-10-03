@@ -190,7 +190,7 @@ describe('the members screen', () => {
 
   it('confirms a removal in place and refreshes the list, leaving no live Remove button', async () => {
     vi.mocked(removeMember).mockResolvedValue({ ok: true, groupId: group.id });
-    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} />);
+    render(<MembersScreen group={group} members={[owner, other]} viewer={ownerView} invite={invite} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     fireEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'Remove Sam' }));
@@ -201,7 +201,9 @@ describe('the members screen', () => {
     // MutationObserver-driven wait can see the status in the DOM a tick before that effect runs.
     // Retrying costs nothing here and still fails if refresh is never called at all.
     await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('Removed Sam.');
+      // The invite block renders a live region of its own on this screen, so the confirmation is
+      // matched by its text and asserted to be the live region it is inserted as.
+      expect(screen.getByText('Removed Sam.')).toHaveAttribute('role', 'status');
       expect(router.refresh).toHaveBeenCalled();
     });
     // Sam's row is the server's to remove, but until the refresh lands the button that just
@@ -211,7 +213,7 @@ describe('the members screen', () => {
 
   it('refreshes the server-rendered name around the form after a rename, alongside Saved.', async () => {
     vi.mocked(renameGroup).mockResolvedValue({ ok: true, groupId: group.id });
-    render(<MembersScreen group={group} members={[owner]} viewer={ownerView} />);
+    render(<MembersScreen group={group} members={[owner]} viewer={ownerView} invite={invite} />);
 
     fireEvent.change(screen.getByLabelText('Group name'), { target: { value: 'Lisbon, April' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
@@ -221,7 +223,7 @@ describe('the members screen', () => {
     // old name until somebody reloads by hand. Waited on with the message, for the same
     // passive-effect reason as the removal case above.
     await waitFor(() => {
-      expect(screen.getByRole('status')).toHaveTextContent('Saved.');
+      expect(screen.getByText('Saved.')).toHaveAttribute('role', 'status');
       expect(router.refresh).toHaveBeenCalled();
     });
   });
