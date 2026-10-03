@@ -1,8 +1,9 @@
 import Link from 'next/link';
 
 import type { GroupRow, InviteRow, MemberRow, Membership } from '@/lib/access';
+import { SETTLE_FIRST_MESSAGE } from '@/lib/balances';
 import { formatMinor } from '@/lib/money';
-import { Money } from '@/components/ui';
+import { Money, directionOf } from '@/components/ui';
 import { LeaveButton, RemoveButton } from '@/components/member-actions';
 import { AddPlaceholderForm, ClaimButton } from '@/components/placeholder-actions';
 import { InviteLink } from '@/components/invite-link';
@@ -49,6 +50,15 @@ export function MembersScreen({
       <ul className="flex flex-col">
         {members.map((member) => {
           const isSelf = member.memberId === viewer.memberId;
+          const settled = member.balanceMinor === 0n;
+          /**
+           * The two controls TR-13 gates, and only on the rows that would carry one: the
+           * viewer's own Leave, or the owner's Remove on somebody else's row. A plain member
+           * looking at another member is offered nothing either way, so there is no control to
+           * withhold and nothing to explain — the sentence below is for the person who would
+           * otherwise have had the button.
+           */
+          const gatedControl = (isSelf && !member.isOwner) || (viewer.isOwner && !isSelf);
           return (
             <li
               key={member.memberId}
@@ -64,7 +74,13 @@ export function MembersScreen({
                 </span>
               </span>
               <span className="flex shrink-0 items-center gap-space-2">
-                <Money formatted={formatMinor(member.balanceMinor, group.currency)} direction="settled" />
+                {/* The viewer's own row reads in the second person and everybody else's in the
+                    third, so a table of names never says "you" down the whole column. */}
+                <Money
+                  formatted={formatMinor(member.balanceMinor, group.currency)}
+                  direction={directionOf(member.balanceMinor)}
+                  voice={isSelf ? 'you' : 'person'}
+                />
                 {/* Leave appears on the viewer's own row and only for a member: the owner has
                     no Leave, and sees the line below instead. Remove appears on somebody
                     else's row and only for the owner. Claim is the mirror of Remove: it
@@ -72,10 +88,10 @@ export function MembersScreen({
                     the owner has no duplicate row to merge into it — the action refuses an
                     owner for that same reason, which is why no viewer is offered a control
                     that could only ever fail. */}
-                {isSelf && !member.isOwner ? (
+                {isSelf && !member.isOwner && settled ? (
                   <LeaveButton groupId={group.id} groupName={group.name} />
                 ) : null}
-                {viewer.isOwner && !isSelf ? (
+                {viewer.isOwner && !isSelf && settled ? (
                   <RemoveButton
                     groupId={group.id}
                     memberId={member.memberId}
@@ -90,6 +106,13 @@ export function MembersScreen({
                   />
                 ) : null}
               </span>
+              {/* TR-13's visible half. The control is gone rather than present-and-refused, and
+                  the sentence that replaces it is the one the action returns if the write is
+                  attempted anyway — a row that hid the button and said nothing would read as a
+                  bug. Its own line, because the row is already 360px wide. */}
+              {gatedControl && !settled ? (
+                <p className="w-full text-sm text-text-muted">{SETTLE_FIRST_MESSAGE}</p>
+              ) : null}
             </li>
           );
         })}
