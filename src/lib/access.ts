@@ -1,5 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { and, asc, desc, eq, inArray, isNotNull, isNull, ne, notInArray, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import type { Database } from '@/db/client';
 import {
@@ -10,6 +11,7 @@ import {
   expenses,
   groups,
   members,
+  payments,
   users,
   type ActivityKind,
   type ExpenseCategory,
@@ -142,6 +144,39 @@ export interface ExpensePayerRow {
   amountMinor: bigint;
 }
 
+/**
+ * One recorded payment as the balances screen lists it: both ends named, and what moved. The
+ * amount is a bigint count of minor units like every other money value (TR-2).
+ */
+export interface PaymentRow {
+  id: string;
+  /** The membership row that paid, and the name every screen shows for it. */
+  fromMemberId: string;
+  fromName: string;
+  /** The membership row that was paid. */
+  toMemberId: string;
+  toName: string;
+  amountMinor: bigint;
+  note: string | null;
+  createdAt: Date;
+}
+
+/**
+ * A payment as the delete path reads it, live or already deleted.
+ *
+ * `deletedAt` is the whole reason this read exists rather than reusing readPaymentsForGroup:
+ * deleting twice has to answer success without a second feed entry, and the guard that tells the
+ * two apart is whether the row the caller may see is still standing.
+ */
+export interface PaymentForDeletion {
+  id: string;
+  fromMemberId: string;
+  toMemberId: string;
+  amountMinor: bigint;
+  note: string | null;
+  deletedAt: Date | null;
+}
+
 /** A row of the expenses list, with the payers already resolved to names. */
 export interface ExpenseRow {
   id: string;
@@ -193,6 +228,21 @@ export interface EditExpense extends ExpenseContent {
   editedBy: string;
 }
 
+/**
+ * The rows a new payment is written as: one member handing another an amount, in the group's own
+ * currency. No currency is carried — a payment has no amount column of its own to record one in,
+ * and the group's currency is fixed at creation.
+ */
+export interface NewPayment {
+  groupId: string;
+  fromMemberId: string;
+  toMemberId: string;
+  amountMinor: bigint;
+  note: string | null;
+  /** The member whose request this is; where the two members are checked, and what the feed says. */
+  recordedBy: string;
+}
+
 /** One member the edit form lists: an active one, or one this expense already refers to. */
 export interface ExpenseEditMember {
   memberId: string;
@@ -234,6 +284,19 @@ export function ownedByCaller(groupId: string, userId: string) {
 /** The same for a write any active member may make. */
 export function memberOfGroup(groupId: string, userId: string) {
   return sql`exists (select 1 from ${members} where ${members.groupId} = ${groupId} and ${members.userId} = ${userId} and ${members.removedAt} is null)`;
+}
+
+/**
+ * The predicate that makes a payment write the caller's: an active membership in this group that
+ * IS one of the two members the payment names (TR-7 — the only people who may delete a payment
+ * are the two it moved money between).
+ *
+ * It is one predicate rather than "member of the group" plus a comparison in TypeScript, because
+ * the comparison needs the caller's membership id and reading that first is the same shape this
+ * module refuses everywhere else: a check that can be separated from the write.
+ */
+function involvedInPayment(groupId: string, userId: string) {
+  return sql`exists (select 1 from ${members} where ${members.groupId} = ${groupId} and ${members.userId} = ${userId} and ${members.removedAt} is null and (${members.id} = ${payments.fromMemberId} or ${members.id} = ${payments.toMemberId}))`;
 }
 
 // --- reads --------------------------------------------------------------------------
@@ -341,7 +404,14 @@ async function readActiveMemberRows(session: Session, groupId: string, userId: s
  * is not read here, and there is no other function in src/ that sums an expense. A member with
  * no rows at all is absent from the map, which every caller reads as zero.
  *
- * The membership predicate travels inside both statements' WHERE clause like every other read in
+ * Payments are the ledger's second kind of row (TR-7) and are summed into the same two halves. A
+ * payment from A to B is A handing over money and B being given it, so it lands on the same sides
+ * an expense's payer and share rows do: A's paid total rises by the amount and B's shared total
+ * rises by it. The subtraction stays where it was — netBalances, one function, so the definition
+ * of a balance is one definition — and the ledger still sums to zero, which is what lets the
+ * settlement algorithm and the sum-to-zero assertion go on reading these rows unchanged.
+ *
+ * The membership predicate travels inside every statement's WHERE clause like every other read in
  * this module, so a non-member — or a forged group id — gets an empty map rather than a number.
  */
 async function readNetByMember(session: Session, groupId: string, userId: string): Promise<Map<string, bigint>> {
@@ -365,15 +435,43 @@ async function readNetByMember(session: Session, groupId: string, userId: string
     .where(and(eq(expenses.groupId, groupId), isNull(expenses.deletedAt), memberOfGroup(groupId, userId)))
     .groupBy(expenseShare.memberId);
 
+  // What each member has handed over in settlements, and what has been handed to them. A deleted
+  // payment is not a payment: its rows stop counting the moment deleted_at is set, which is what
+  // makes the delete restore both balances.
+  const paidOut = await session
+    .select({
+      memberId: payments.fromMemberId,
+      totalMinor: sql<string>`sum(${payments.amountMinor})::text`,
+    })
+    .from(payments)
+    .where(and(eq(payments.groupId, groupId), isNull(payments.deletedAt), memberOfGroup(groupId, userId)))
+    .groupBy(payments.fromMemberId);
+
+  const received = await session
+    .select({
+      memberId: payments.toMemberId,
+      totalMinor: sql<string>`sum(${payments.amountMinor})::text`,
+    })
+    .from(payments)
+    .where(and(eq(payments.groupId, groupId), isNull(payments.deletedAt), memberOfGroup(groupId, userId)))
+    .groupBy(payments.toMemberId);
+
   const paidByMember = new Map(paid.map((row) => [row.memberId, BigInt(row.totalMinor)]));
   const sharedByMember = new Map(shared.map((row) => [row.memberId, BigInt(row.totalMinor)]));
-  const ledger: MemberLedger[] = [...new Set([...paidByMember.keys(), ...sharedByMember.keys()])].map(
-    (memberId) => ({
-      memberId,
-      paidMinor: paidByMember.get(memberId) ?? 0n,
-      sharedMinor: sharedByMember.get(memberId) ?? 0n,
-    }),
-  );
+  const paidOutByMember = new Map(paidOut.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const receivedByMember = new Map(received.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+
+  const memberIds = new Set([
+    ...paidByMember.keys(),
+    ...sharedByMember.keys(),
+    ...paidOutByMember.keys(),
+    ...receivedByMember.keys(),
+  ]);
+  const ledger: MemberLedger[] = [...memberIds].map((memberId) => ({
+    memberId,
+    paidMinor: (paidByMember.get(memberId) ?? 0n) + (paidOutByMember.get(memberId) ?? 0n),
+    sharedMinor: (sharedByMember.get(memberId) ?? 0n) + (receivedByMember.get(memberId) ?? 0n),
+  }));
 
   // netBalances does the subtraction, so the definition of a balance is in one function rather
   // than in each read that needs it.
@@ -512,6 +610,110 @@ export async function readExpensesForGroup(
   }
 
   return rows.map((row) => ({ ...row, payers: payersByExpense.get(row.id) ?? [] }));
+}
+
+/**
+ * The group's recorded payments, newest first and with both names already resolved, for a caller
+ * who is an active member. Null for everybody else, so a non-member reads nothing rather than an
+ * empty list (TR-1).
+ *
+ * Both members are joined as aliases of the same table, because a payment names two membership
+ * rows and a single join cannot say which end it matched. Each name is the live profile first and
+ * the stored placeholder name second, exactly as every other read resolves a member — so a
+ * payment to somebody who has been removed, or to a placeholder nobody has claimed, still reads
+ * with the name the group knows them by (TR-16).
+ *
+ * Deleted payments are filtered out rather than returned flagged: the feed entry is what remembers
+ * them, and a screen that lists them would be a second history that could disagree with the
+ * balances.
+ */
+export async function readPaymentsForGroup(
+  session: Session,
+  groupId: string,
+  userId: string,
+): Promise<PaymentRow[] | null> {
+  const membership = await readMembership(session, groupId, userId);
+  if (!membership) return null;
+
+  const fromMember = alias(members, 'payment_from_member');
+  const fromUser = alias(users, 'payment_from_user');
+  const toMember = alias(members, 'payment_to_member');
+  const toUser = alias(users, 'payment_to_user');
+
+  const rows = await session
+    .select({
+      id: payments.id,
+      fromMemberId: payments.fromMemberId,
+      fromProfileName: fromUser.displayName,
+      fromStoredName: fromMember.displayName,
+      toMemberId: payments.toMemberId,
+      toProfileName: toUser.displayName,
+      toStoredName: toMember.displayName,
+      amountMinor: payments.amountMinor,
+      note: payments.note,
+      createdAt: payments.createdAt,
+    })
+    .from(payments)
+    .innerJoin(fromMember, eq(fromMember.id, payments.fromMemberId))
+    .leftJoin(fromUser, eq(fromUser.id, fromMember.userId))
+    .innerJoin(toMember, eq(toMember.id, payments.toMemberId))
+    .leftJoin(toUser, eq(toUser.id, toMember.userId))
+    // The membership predicate is the authorisation, exactly as it is on the expenses list: the
+    // real `members` table inside memberOfGroup's subquery is not the aliased join above, so it
+    // is the group's membership being asked about and not one of the payment's two ends.
+    .where(and(eq(payments.groupId, groupId), isNull(payments.deletedAt), memberOfGroup(groupId, userId)))
+    // `id` breaks a tie on the timestamp, which two payments written by the same transaction
+    // share: now() is the transaction's start time, not each statement's.
+    .orderBy(desc(payments.createdAt), desc(payments.id));
+
+  return rows.map((row) => ({
+    id: row.id,
+    fromMemberId: row.fromMemberId,
+    fromName: row.fromProfileName ?? row.fromStoredName ?? 'Member',
+    toMemberId: row.toMemberId,
+    toName: row.toProfileName ?? row.toStoredName ?? 'Member',
+    amountMinor: row.amountMinor,
+    note: row.note,
+    createdAt: row.createdAt,
+  }));
+}
+
+/**
+ * One payment, live or already deleted, for a caller who is an active member AND one of the two
+ * members it involves. Null for everybody else — a third member included.
+ *
+ * This is TR-7's delete authorisation as a read, and it is deliberately the same predicate the
+ * guarded UPDATE carries (involvedInPayment), so a caller who may see the row to delete it is a
+ * caller who may delete it and there is no view a third member gets that the write would refuse.
+ * The row comes back whether or not it is deleted, because the action has to tell "already gone"
+ * (answer success, write nothing) from "never yours" (refuse).
+ */
+export async function readPaymentForDeletion(
+  session: Session,
+  groupId: string,
+  paymentId: string,
+  userId: string,
+): Promise<PaymentForDeletion | null> {
+  const rows = await session
+    .select({
+      id: payments.id,
+      fromMemberId: payments.fromMemberId,
+      toMemberId: payments.toMemberId,
+      amountMinor: payments.amountMinor,
+      note: payments.note,
+      deletedAt: payments.deletedAt,
+    })
+    .from(payments)
+    .where(
+      and(
+        eq(payments.id, paymentId),
+        eq(payments.groupId, groupId),
+        involvedInPayment(groupId, userId),
+      ),
+    )
+    .limit(1);
+
+  return rows[0] ?? null;
 }
 
 /**
@@ -739,12 +941,38 @@ export async function listGroupsForUser(session: Session, userId: string): Promi
     .where(and(eq(members.userId, userId), isNull(members.removedAt), isNull(expenses.deletedAt)))
     .groupBy(expenseShare.memberId);
 
+  // Payments, summed the same way and onto the same two halves as readNetByMember does, so a
+  // group's total here equals the balance that group's own screen shows (TR-8). The join onto the
+  // caller's own membership row is again the authorisation and again the key: a payment whose
+  // either end is somebody else in the group is not reachable from here.
+  const paidOut = await session
+    .select({
+      memberId: payments.fromMemberId,
+      totalMinor: sql<string>`sum(${payments.amountMinor})::text`,
+    })
+    .from(payments)
+    .innerJoin(members, eq(members.id, payments.fromMemberId))
+    .where(and(eq(members.userId, userId), isNull(members.removedAt), isNull(payments.deletedAt)))
+    .groupBy(payments.fromMemberId);
+
+  const received = await session
+    .select({
+      memberId: payments.toMemberId,
+      totalMinor: sql<string>`sum(${payments.amountMinor})::text`,
+    })
+    .from(payments)
+    .innerJoin(members, eq(members.id, payments.toMemberId))
+    .where(and(eq(members.userId, userId), isNull(members.removedAt), isNull(payments.deletedAt)))
+    .groupBy(payments.toMemberId);
+
   const paidByMember = new Map(paid.map((row) => [row.memberId, BigInt(row.totalMinor)]));
   const sharedByMember = new Map(shared.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const paidOutByMember = new Map(paidOut.map((row) => [row.memberId, BigInt(row.totalMinor)]));
+  const receivedByMember = new Map(received.map((row) => [row.memberId, BigInt(row.totalMinor)]));
   const ledger: MemberLedger[] = rows.map((row) => ({
     memberId: row.memberId,
-    paidMinor: paidByMember.get(row.memberId) ?? 0n,
-    sharedMinor: sharedByMember.get(row.memberId) ?? 0n,
+    paidMinor: (paidByMember.get(row.memberId) ?? 0n) + (paidOutByMember.get(row.memberId) ?? 0n),
+    sharedMinor: (sharedByMember.get(row.memberId) ?? 0n) + (receivedByMember.get(row.memberId) ?? 0n),
   }));
   const balances = new Map(netBalances(ledger).map((balance) => [balance.memberId, balance.balanceMinor]));
 
@@ -1052,6 +1280,73 @@ async function assertExpenseRowsSum(tx: Tx, expenseId: string, totalMinor: bigin
       `tabs: expense ${expenseId} was written with payers totalling ${paid} and shares totalling ${shared}, against a total of ${totalMinor}`,
     );
   }
+}
+
+/**
+ * Records one payment between two members of the group. Returns the new payment's id, or null
+ * when the caller is not an active member of the group, in which case nothing was written.
+ *
+ * The membership predicate travels INSIDE the insert — `insert ... select ... where exists (a
+ * membership)` — for the reason the rest of this module gives: a check that can be separated from
+ * the write is a check that gets forgotten. The two members the payment names are checked by the
+ * action against the group's active member list, read on this same transaction, exactly as an
+ * expense's payers and participants are; there is no second place a member could be added from.
+ */
+export async function createPayment(tx: Tx, input: NewPayment): Promise<string | null> {
+  const paymentId = randomUUID();
+
+  const inserted = await tx.execute<{ id: string }>(sql`
+    insert into ${payments}
+      (id, group_id, from_member_id, to_member_id, amount_minor, note, recorded_by)
+    select
+      ${paymentId}::uuid,
+      ${input.groupId}::uuid,
+      ${input.fromMemberId}::uuid,
+      ${input.toMemberId}::uuid,
+      ${input.amountMinor.toString()}::bigint,
+      ${input.note},
+      ${input.recordedBy}::uuid
+    where ${memberOfGroup(input.groupId, input.recordedBy)}
+    returning id
+  `);
+
+  return inserted.rows[0]?.id ?? null;
+}
+
+/**
+ * Deletes a payment: deleted_at is set on the row, which is what stops it counting.
+ *
+ * A balance is a sum over stored rows, so a payment stops moving money the moment its row is
+ * filtered out by every read — which is why the delete is this flag and not a correction written
+ * against the balances. The row itself stays, because the payment.recorded entry that named it
+ * outlives it and a feed entry pointing at nothing is a feed entry the reader cannot interpret.
+ *
+ * The guarded UPDATE is the whole of both the authorisation and the idempotence. `deleted_at is
+ * null` means a second delete of the same payment — a double submit, a second tab — matches no
+ * row, so it removes nothing and returns false, and the caller answers that the same way it
+ * answered the first and writes no second feed entry (TR-17). `involvedInPayment` means a third
+ * member is not merely refused by a sentence somewhere else: their request reaches no row at all.
+ */
+export async function softDeletePayment(
+  tx: Tx,
+  groupId: string,
+  paymentId: string,
+  userId: string,
+): Promise<boolean> {
+  const deleted = await tx
+    .update(payments)
+    .set({ deletedAt: new Date() })
+    .where(
+      and(
+        eq(payments.id, paymentId),
+        eq(payments.groupId, groupId),
+        isNull(payments.deletedAt),
+        involvedInPayment(groupId, userId),
+      ),
+    )
+    .returning();
+
+  return deleted.length > 0;
 }
 
 /** Renames a group the caller owns. False when they do not own it, with nothing written. */

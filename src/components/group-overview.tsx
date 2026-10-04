@@ -170,6 +170,10 @@ function describe(entry: ActivityRow): string {
     'expense.added': 'added an expense',
     'expense.edited': 'edited an expense',
     'expense.deleted': 'deleted an expense',
+    // Same reading as the expense kinds: the actor and what happened, with the payment's two ends
+    // and its amount left to the entry's subject and detail, which the feed screens of #8 render.
+    'payment.recorded': 'recorded a payment',
+    'payment.deleted': 'deleted a payment',
   };
   return `${who} ${what[entry.kind]}`;
 }

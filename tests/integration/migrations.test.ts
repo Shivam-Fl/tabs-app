@@ -22,7 +22,8 @@ describe('the committed migration list', () => {
     const db = await useTestDatabase();
 
     // 0000 stands up accounts and sign-in; 0001 adds the groups, the memberships and the feed;
-    // 0003 adds the expenses, their payer/share/rule rows, and the feed's subject/detail.
+    // 0003 adds the expenses, their payer/share/rule rows, and the feed's subject/detail;
+    // 0004 adds the payments a group settles up with.
     expect(await tableNames(db)).toEqual([
       'activity',
       'expense_payer',
@@ -32,6 +33,7 @@ describe('the committed migration list', () => {
       'groups',
       'login_attempts',
       'members',
+      'payments',
       'sessions',
       'tabs_migrations',
       'users',
@@ -60,6 +62,10 @@ describe('the committed migration list', () => {
     // what the search of piece 8 will use.
     expect(names).toContain('expenses_group_date_idx');
     expect(names).toContain('expenses_description_idx');
+
+    // Migration 0004. The payments list is read newest-first per group, which is the same index
+    // shape 0003 gave the expense list (TR-18).
+    expect(names).toContain('payments_group_created_idx');
   });
 
   it('creates the expense enums with exactly the values the schema and the form offer', async () => {
@@ -229,6 +235,15 @@ describe('the migration files themselves', () => {
     // Every statement is breakpoint-terminated but the last, so a file with no markers at all
     // — the hand-written kind — fails here rather than on the production backend.
     expect(statementsOf(expenses?.sql ?? '').length).toBeGreaterThan(10);
+
+    // And 0004, generator output for the same reason: a payments table that existed on PGlite
+    // and nowhere else would be a settlement that vanished in production.
+    const payments = migrations.find((migration) => migration.tag.includes('payments'));
+    expect(payments, 'no committed migration creates the payments table').toBeTruthy();
+    expect(payments?.sql).toContain('CREATE TABLE "payments"');
+    expect(payments?.sql).toContain('"amount_minor" bigint NOT NULL');
+    expect(payments?.sql).toContain('"deleted_at" timestamp with time zone');
+    expect(payments?.sql).toContain('"recorded_by" uuid');
   });
 });
 

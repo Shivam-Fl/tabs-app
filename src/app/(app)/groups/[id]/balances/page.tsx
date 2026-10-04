@@ -3,7 +3,7 @@ import { notFound } from 'next/navigation';
 import { z } from 'zod';
 
 import { database } from '@/db/client';
-import { readBalancesForGroup, readGroup } from '@/lib/access';
+import { readBalancesForGroup, readGroup, readPaymentsForGroup } from '@/lib/access';
 import { requireUser } from '@/lib/auth';
 import { simplifyDebts, sumBalances } from '@/lib/balances';
 import { BalancesScreen } from '@/components/balances-screen';
@@ -47,5 +47,31 @@ export default async function BalancesPage({ params }: { params: Promise<{ id: s
 
   const transfers = simplifyDebts(balances.members);
 
-  return <BalancesScreen group={group} members={balances.members} transfers={transfers} />;
+  const payments = await readPaymentsForGroup(db, parsed.data.id, user.id);
+  if (!payments) notFound();
+
+  /**
+   * What the Record payment form opens on (TR-7).
+   *
+   * The first simplified transfer when the group has a debt left to settle — the debtor paid the
+   * creditor is the payment somebody is about to make, so the ordinary case is record, type a
+   * figure, submit — and the first two members in canonical order otherwise, which is a group
+   * that is square and is recording something ahead of the balances catching up, or a group that
+   * has never had an expense.
+   */
+  const [firstTransfer] = transfers;
+  const defaultFrom = firstTransfer?.fromMemberId ?? balances.members[0]?.memberId;
+  const defaultTo = firstTransfer?.toMemberId ?? balances.members[1]?.memberId;
+
+  return (
+    <BalancesScreen
+      group={group}
+      members={balances.members}
+      transfers={transfers}
+      payments={payments}
+      viewerMemberId={balances.viewerMemberId}
+      defaultFrom={defaultFrom}
+      defaultTo={defaultTo}
+    />
+  );
 }
