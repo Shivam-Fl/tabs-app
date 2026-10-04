@@ -92,6 +92,218 @@
   "stopped_at": null,
   "dispatched_stage": "plan",
   "validated_from": "plan",
-  "validated_at": "2026-10-04T14:05:10.375Z",
-  "validated_ac_changes": []
+  "validated_at": "2026-10-04T14:16:02.387Z",
+  "validated_ac_changes": [],
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "A member records a payment choosing from, to, amount and optional note, in full or in part, and both balances move by exactly that amount without a page reload.",
+        "how_to_verify": "Seed a group with a 10.00 debt, record a 4.00 payment in the balances-screen form, assert both nets moved by 4.00 and the page did not navigate.",
+        "id": "AC-1",
+        "source": "IAC-1",
+        "verify": "browser"
+      },
+      {
+        "check": "A recorded payment appears in the group overview's recent activity naming who recorded it.",
+        "how_to_verify": "Record a payment then read the group overview; assert one recent entry reading '<recorder> recorded a payment' with its date.",
+        "id": "AC-2",
+        "source": "IAC-2",
+        "verify": "browser"
+      },
+      {
+        "check": "The recorded payment's feed entry carries exactly one payment.recorded entry with actor, timestamp, payment subject and string amountMinor detail.",
+        "how_to_verify": "Run tests/integration/payments.test.ts case 'record writes exactly one payment.recorded entry with actor, timestamp, subjectType payment, subjectId and detail {fromMemberId, toMemberId, amountMinor as string, note}'.",
+        "id": "AC-3",
+        "source": "IAC-2",
+        "verify": "test"
+      },
+      {
+        "check": "A partial payment leaves the remainder owed: per-member table shows it and the transfer list is recomputed from the new balances.",
+        "how_to_verify": "Record a partial payment; assert the member table figures and that simplifyDebts over the new nets equals the rendered transfer list.",
+        "id": "AC-4",
+        "source": "IAC-3",
+        "verify": "browser"
+      },
+      {
+        "check": "Either involved member can delete a payment after confirming in a dialog that names it and both balances return exactly.",
+        "how_to_verify": "Delete as the recipient, confirm the dialog naming '€10.00 from Sam to Priya', assert nets restored exactly.",
+        "id": "AC-5",
+        "source": "IAC-4",
+        "verify": "browser"
+      },
+      {
+        "check": "A third member is refused the delete with nothing written.",
+        "how_to_verify": "Run tests/integration/payments.test.ts case 'third member is refused the delete with nothing written'.",
+        "id": "AC-6",
+        "source": "IAC-4",
+        "verify": "test"
+      },
+      {
+        "check": "Payment write and its activity entry commit in one transaction: a failed write leaves no entry and a success leaves exactly one.",
+        "how_to_verify": "Run tests/integration/payments.test.ts atomicity cases (recordActivity mock throw, then success count).",
+        "id": "AC-7",
+        "source": "IAC-5",
+        "verify": "test"
+      },
+      {
+        "check": "Non-positive amounts are refused with the reason beside the amount field and the form keeps every typed value.",
+        "how_to_verify": "Submit amount 0; assert a field error adjacent to the amount field, all inputs retain their values, and focus moves to the amount field.",
+        "id": "AC-8",
+        "source": "IAC-6",
+        "verify": "browser"
+      },
+      {
+        "check": "Non-member parties are refused with the reason on their field.",
+        "how_to_verify": "Run tests/integration/payments.test.ts case 'validation: non-member from/to refused with fieldErrors on from/to'.",
+        "id": "AC-9",
+        "source": "IAC-6",
+        "verify": "test"
+      },
+      {
+        "check": "The submit button disables and reads 'Recording…' while the write is in flight and is the only busy state.",
+        "how_to_verify": "Slow the action, click Record payment, assert the button shows 'Recording…' and is disabled; assert no other spinner or skeleton appears for the submit.",
+        "id": "AC-10",
+        "source": "IAC-7",
+        "verify": "browser"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Model payments as negative expenses (payer/share rows on a zero-total expense) to reuse the expense write path.",
+        "rejected_because": "It would smuggle payments through expense_payer/expense_share, breaking TR-4's readable invariant that balances sum stored expense rows plus stored payment rows and that expense edits never touch payments; a dedicated table keeps the two ledgers independently auditable and the activity kinds distinct."
+      },
+      {
+        "approach": "Host the delete control on the activity feed entry instead of a Payments section on the balances screen.",
+        "rejected_because": "Feed screens are explicitly out of scope for this piece, so the delete would land in code this ticket does not own; the balances screen already owns settle-up and can list payments newest-first with the same dialog pattern as DeleteExpenseButton."
+      }
+    ],
+    "approach": "Add a payments table per TRD (id, group_id, from_member_id, to_member_id, amount_minor bigint, note, recorded_by, created_at, deleted_at with soft-delete) plus payment.recorded/payment.deleted activity kinds and a 'payment' subject type. Define the payment's balance effect as from += amount and to -= amount (debtor pays creditor), which preserves the zero-sum invariant simplifyDebts asserts. Extend readNetByMember with two payment sums (outgoing by from_member_id, incoming by to_member_id, both filtered to group_id, deleted_at null, and the memberOfGroup predicate) so net = paid - shared + (sumFrom - sumTo); extend listGroupsForUser with the same adjustment keyed by the caller's own membership row so home totals stay the sum of per-group balances (TR-8). Add access helpers createPayment (insert-select-where memberOfGroup guard), softDeletePayment (guarded UPDATE setting deleted_at, authorised by caller memberId being from or to), and readPaymentsForGroup (newest first with resolved names, null for non-members). Add src/app/actions/payments.ts with recordPayment and deletePayment following the expenses.ts shape: Zod parse in-file, requireUser, single db.transaction writing payment row plus exactly one recordActivity entry, typed { ok, fieldErrors, formError } result, revalidatePath('/', 'layout'), money parsed only via src/lib/money.ts parseMajorUnits with the same MAX_INT8 bound. Validation: both members active in the group (unknown member -> fieldErrors on from/to), from != to, amount positive in group currency, note <= 500 chars, archived group refused. Delete: caller must be an active member AND one of the two involved members; double-delete answers success with no second entry. UI: client PaymentForm (from/to selects, amount with fixed currency symbol, optional note, field errors beside fields with focus to first invalid, controlled state, submit Button busyLabel 'Recording…', on success router.refresh()), DeletePaymentButton (Dialog naming the payment, destructive confirm), BalancesScreen Payments list newest-first with per-row delete for involved members only, balances page fetches payments, and GroupOverview describe() gains the two payment kind-only sentences.",
+    "assumptions": [
+      "Group currency is fixed at creation and every payment amount is parsed in it via parseMajorUnits; no per-payment currency field (TRD payment entity lists none).",
+      "from/to selects default to the first simplified transfer's debtor/creditor when one exists, else the first two canonical members.",
+      "MAX_INT8 bound (9223372036854775807n) applies to payment amounts exactly as to expense amounts, refused beside the amount field.",
+      "Delete authorisation requires the caller to be currently active AND one of the two members; a removed caller gets the same 404/unavailable answer as other group writes."
+    ],
+    "confidence": 84,
+    "confidence_rationale": "Load-bearing claims re-checked against the code: no payments table or payment activity kinds in src/db/schema.ts, the disabled Record payment placeholder in balances-screen.tsx, the two balance-sum sites in src/lib/access.ts, the TRD payment entity with deleted_at, GroupOverview describe() as the only activity surface with its exhaustive Record requiring a payment sentence, and docs/ui.md already describing the Record payment form shape.",
+    "debate_summary": "critique.json was {} so there were no findings to uphold or dismiss and nothing contradicting the binding route-note decision in plan/brief.md (balances read only from stored rows; edit/delete replaces stored rows in one transaction with the activity entry; extended here to payments). I verified the load-bearing claims myself against the code (missing payments table/kinds, disabled Record-payment placeholder, the two balance-sum sites in src/lib/access.ts, exhaustive describe() in group-overview.tsx requiring that file's edit). The v2 proposal had already answered each binding v1-rejection objection, which I kept: AC-2 split into browser kind-sentence plus test entry-detail halves; AC-4 split into browser involved-delete plus test third-member-refusal halves; AC-6 split into browser zero-amount plus test unknown-member halves with the action aligned to fieldErrors on from/to.",
+    "evidence": [
+      "src/db/schema.ts has no payments table and activityKinds/activitySubjectTypes have no payment entries.",
+      "src/components/balances-screen.tsx renders a disabled Record payment button with 'not built yet'.",
+      "src/lib/access.ts readNetByMember sums only expense_payer/expense_share; listGroupsForUser repeats those sums inline; readBalancesForGroup callers are page.tsx, groups/[id]/page.tsx, groups/[id]/balances/page.tsx.",
+      "src/components/group-overview.tsx describe() is an exhaustive Record over ActivityKind rendering actor plus a kind sentence only; no activity feed routes exist under src/app.",
+      "BalancesScreen has exactly one caller: src/app/(app)/groups/[id]/balances/page.tsx."
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Add payments table (id uuid PK, group_id FK groups cascade, from_member_id and to_member_id FK members cascade, amount_minor bigint not null, note text, recorded_by uuid FK users set null, created_at defaultNow, deleted_at) with index on group_id; extend activitySubjectTypes with 'payment' and activityKinds with 'payment.recorded' and 'payment.deleted' with a comment describing each detail blob (fromMemberId, toMemberId, amountMinor as string of minor units, note).",
+        "path": "src/db/schema.ts",
+        "why": "The stored payment row is the ledger for settle-up the way payer/share rows are for expenses."
+      },
+      {
+        "action": "create",
+        "change": "Generated migration creating the payments table, its FKs/indexes, and the new activity kind values (via drizzle-kit generate); plus the regenerated drizzle/meta snapshot and _journal entries.",
+        "path": "drizzle/0004_payments.sql",
+        "why": "Same migration list runs on PGlite and Neon on boot behind the lock."
+      },
+      {
+        "action": "edit",
+        "change": "Extend readNetByMember with payment adjustment (sum from_member minus sum to_member over non-deleted group payments, membership-predicated); extend listGroupsForUser with the same per-caller adjustment; add createPayment, softDeletePayment, and readPaymentsForGroup.",
+        "path": "src/lib/access.ts",
+        "why": "One balance definition in one module: every screen and both leave/remove guards see the same payment-adjusted figure."
+      },
+      {
+        "action": "create",
+        "change": "recordPayment and deletePayment Server Actions: in-file Zod schemas, requireUser, validate against active members (unknown member -> fieldErrors on from/to), one db.transaction each writing the payment row plus exactly one recordActivity entry (subjectType payment, amountMinor as string), typed result with fieldErrors/formError, revalidatePath on success.",
+        "path": "src/app/actions/payments.ts",
+        "why": "The contract half of the issue: one transaction per write, field-level refusals, delete restricted to involved members."
+      },
+      {
+        "action": "create",
+        "change": "Client Record payment form: from/to selects, amount input with fixed currency symbol, optional note, field-level errors with aria-describedby and focus to first invalid, controlled state, submit Button busyLabel 'Recording…', on success router.refresh().",
+        "path": "src/components/payment-form.tsx",
+        "why": "What the person sees on /groups/[id]/balances: full or partial payment recorded without a page reload."
+      },
+      {
+        "action": "create",
+        "change": "Client delete control: destructive Button opening Dialog naming the payment and stating both balances return, confirm submits deletePayment via hidden form with useActionState.",
+        "path": "src/components/delete-payment-button.tsx",
+        "why": "IAC-4's confirmation that names the thing destroyed, keyboard-operable per docs/ui.md."
+      },
+      {
+        "action": "edit",
+        "change": "Replace the disabled Record payment block with PaymentForm; add a Payments section newest-first with per-row DeletePaymentButton for involved members only; extend props to accept payments and viewer member id.",
+        "path": "src/components/balances-screen.tsx",
+        "why": "The screen must both record a payment and expose each stored payment for deletion while feed screens are out of scope."
+      },
+      {
+        "action": "edit",
+        "change": "Fetch readPaymentsForGroup alongside group and balances (404 for non-member), keep the sum-to-zero assertion before simplifyDebts, pass members/transfers/payments/viewer to BalancesScreen.",
+        "path": "src/app/(app)/groups/[id]/balances/page.tsx",
+        "why": "Server Components do the reading; the page stays the single authorised read."
+      },
+      {
+        "action": "edit",
+        "change": "Extend describe() with 'payment.recorded' -> 'recorded a payment' and 'payment.deleted' -> 'deleted a payment' (actor plus kind sentence only). Required because the Record is exhaustive over ActivityKind.",
+        "path": "src/components/group-overview.tsx",
+        "why": "The overview's recent block is the only activity surface this piece owns; subject/detail rendering belongs to piece 8."
+      }
+    ],
+    "issue": 9,
+    "kind": "feature",
+    "out_of_scope": [
+      "Feed screens rendering the full entry with from/to/amount detail (piece 8 owns them; this piece writes the payment.recorded/deleted kinds and detail they will render, and the overview shows only the kind sentence).",
+      "Moving money (UPI/cards/webhooks); Tabs records a payment only.",
+      "Editing a payment (only record and delete per the issue)."
+    ],
+    "qa_script": [
+      "Seed the app and open /groups/[id]/balances for a group with a known debt (e.g. Sam owes Priya €10.00).",
+      "Choose from Sam to Priya, amount 4.00, note 'first part', submit; confirm both nets moved by €4.00 and the transfer list now shows €6.00 remaining without a reload.",
+      "Open the group overview; confirm the recent activity names the recorder with 'recorded a payment' and a date.",
+      "Submit amount 0; confirm an error beside the amount field and that all typed values remain.",
+      "Click delete on the €4.00 payment; confirm the dialog names '€4.00 from Sam to Priya' with a destructive confirm; confirm and check both balances returned exactly."
+    ],
+    "residual_risks": [
+      "Double-delete answers success with no second entry rather than 404.",
+      "Soft-deleted rows remain in the payments table for the feed entry to reference; a future export must filter deleted_at.",
+      "Payment-list placement on the balances screen is an interpretation of docs/ui.md; QA should confirm it does not crowd the transfer list."
+    ],
+    "risks": [
+      "Payment-history placement is an interpretation: docs/ui.md Balances Regions lists only table, transfer list and Record payment action, but the delete control needs a row to live on while feed screens (piece 8) are out of scope.",
+      "Soft-delete vs hard-delete: TRD gives payment a deleted_at column, so this plan soft-deletes even though the issue says 'removes the row'; the visible effect is identical.",
+      "From/to must be active members; an involved member who has since left cannot delete until rejoining (TR-1 non-members see 404).",
+      "No docs/ or .sdlc/ changes: docs/ui.md already describes the Record payment form shape and TR-4/TR-7 already state the rewritten invariant."
+    ],
+    "root_cause": "No payment record, write path, or balance effect exists: the schema, the two balance-sum sites, the activity kinds, the Server Actions and the balances-screen controls for TR-7 were never built (the screen says so explicitly).",
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "partial payment moves both balances by exactly its amount and recomputes transfers",
+          "record writes exactly one payment.recorded entry with actor, timestamp, subjectType payment, subjectId and detail {fromMemberId, toMemberId, amountMinor as string, note}",
+          "delete by an involved member restores both balances exactly; second delete is success with no second entry",
+          "third member is refused the delete with nothing written",
+          "atomicity: mocked recordActivity throwing leaves no payment row and no entry; one successful write leaves exactly one entry",
+          "validation: non-member from/to refused with fieldErrors on from/to, zero/negative amount refused, from==to refused, archived group refused",
+          "leave/remove guard sees payment-adjusted balance"
+        ],
+        "path": "tests/integration/payments.test.ts"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "replace disabled-control case: Record payment form renders with from/to/amount/note and submit busy Recording state",
+          "payments list renders newest first with per-row delete button naming the payment",
+          "settled message still renders when transfers empty and payments empty"
+        ],
+        "path": "tests/components/balances-screen.test.tsx"
+      }
+    ],
+    "understanding": "Settle-up payments do not exist yet: there is no payments table, no src/app/actions/payments.ts, and BalancesScreen renders a disabled 'Record payment' placeholder (sole caller: the balances page). Balances are read in exactly two places: readNetByMember (used by readMembers, readBalancesForGroup, readNetBalanceForMember) which sums expense_payer minus expense_share only, and listGroupsForUser which repeats those sums inline. No activity feed routes exist under src/app; the only activity surface is GroupOverview's recent block, whose describe() is an exhaustive Record rendering actor plus a kind sentence only. The binding decisions are already in the code: balances read only from stored payer/share rows, and TR-4's rewrite (edit/delete replaces stored rows in one transaction with the activity entry). This plan extends that rule to payments: a payment is a stored row plus exactly one activity entry in one transaction, and balances sum stored expense rows plus stored payment rows.",
+    "unknowns": [
+      "Whether QA seed (piece 9, TR-26) should include a sample payment; this plan does not change the seed endpoint."
+    ],
+    "version": 2
+  }
 }
