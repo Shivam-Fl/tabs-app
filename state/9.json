@@ -231,7 +231,19 @@
     "version": 1,
     "mode": "committed"
   },
-  "touch_paths": [],
+  "touch_paths": [
+    "src/db/schema.ts",
+    "drizzle/0004_payments.sql",
+    "src/lib/access.ts",
+    "src/app/actions/payments.ts",
+    "src/components/payment-form.tsx",
+    "src/components/delete-payment-button.tsx",
+    "src/components/balances-screen.tsx",
+    "src/app/(app)/groups/[id]/balances/page.tsx",
+    "src/components/group-overview.tsx",
+    "tests/integration/payments.test.ts",
+    "tests/components/balances-screen.test.tsx"
+  ],
   "acceptance": [],
   "planned_route": [
     "plan",
