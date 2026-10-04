@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { closeTestDatabase, useTestDatabase } from '../helpers/pglite';
-import { TestCookieStore, form, withRequest } from '../helpers/request';
+import { TestCookieStore, form, revalidatePath, withRequest } from '../helpers/request';
 import type { Database } from '@/db/client';
 import { activity, members, sessions, users } from '@/db/schema';
 import { createGroup } from '@/app/actions/groups';
@@ -238,6 +238,32 @@ describe('undoing a leave', () => {
 });
 
 describe('removing somebody else', () => {
+  it('does not revalidate, which is what lets the members screen confirm the removal in place', async () => {
+    const { owner, sam, groupId } = await groupWithTwo();
+    // A third member, because the control below leaves Sam: removal is refused for a membership
+    // whose removed_at is already set, so the same row cannot serve both halves of this test.
+    const jo = await seedUser('jo@example.invalid', 'Jo');
+    const joMemberId = randomUUID();
+    await db.insert(members).values({ id: joMemberId, groupId, userId: jo.id });
+    // Creating the group above revalidated once of its own; the control counts from here.
+    revalidatePath.mockClear();
+
+    // The control first: a sibling action the same screen drives still revalidates, so a spy that
+    // has seen nothing after the removal below is a spy that works rather than one wired to
+    // nothing.
+    const left = await withRequest(sam.cookies, () => leaveGroup(null, form({ groupId })));
+    expect(left).toEqual({ ok: true, groupId });
+    expect(revalidatePath).toHaveBeenCalledTimes(1);
+    revalidatePath.mockClear();
+
+    const result = await withRequest(owner.cookies, () =>
+      removeMember(null, form({ groupId, memberId: joMemberId })),
+    );
+
+    expect(result).toEqual({ ok: true, groupId });
+    expect(revalidatePath).not.toHaveBeenCalled();
+  }, 60_000);
+
   it('ends the membership by setting removed_at, owner-only, and writes one member.removed', async () => {
     const { owner, sam, groupId, samMemberId } = await groupWithTwo();
 

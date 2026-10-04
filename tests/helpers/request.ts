@@ -30,12 +30,20 @@ vi.mock('next/navigation', () => ({
  * The same for revalidatePath. Outside a request there is no static generation store, and the
  * call is a cache invalidation rather than part of the write — the assertion belongs on the
  * row the write produced.
+ *
+ * Hoisted and EXPORTED so a test can assert the absence of the call as well as its presence:
+ * `removeMember` deliberately does not revalidate (AC-3), and that exception has no other
+ * observable in a test — the confirmation it protects is a browser's to see.
  */
+const revalidatePathMock = vi.hoisted(() => vi.fn());
+
 vi.mock('next/cache', () => ({
-  revalidatePath: vi.fn(),
+  revalidatePath: revalidatePathMock,
   revalidateTag: vi.fn(),
   unstable_cache: <T,>(fn: T) => fn,
 }));
+
+export const revalidatePath = revalidatePathMock;
 
 /** An in-memory cookie jar, shaped like what next/headers exposes to a Server Action. */
 export class TestCookieStore implements CookieReaderWriter {

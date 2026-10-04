@@ -360,6 +360,25 @@ export async function removeMember(_previous: MemberResult | null, formData: For
 
   if (!removed) return { ok: false, formError: 'That member could not be removed.' };
 
-  revalidatePath('/', 'layout');
+  /**
+   * The one action in this file that deliberately does NOT revalidate, and the reason is the
+   * confirmation the person is owed for a removal they cannot otherwise see (AC-3).
+   *
+   * A removal happens on the members screen and stays there, so RemoveButton is where the result
+   * shows: it renders 'Removed <name>.' from the committed ok state and only then dispatches its
+   * own router.refresh(). Revalidating here defeats precisely that. The revalidated page is a
+   * Flight response that ships back WITH the action result, so React commits the refreshed
+   * members list — which no longer contains the removed row, and unmounts the button that was
+   * about to render the status — in the SAME commit that delivers the ok state. The status is
+   * never a node. Measured on a production build: with this line the role=status paragraph is
+   * never inserted and the row still goes; without it 'Removed Sam.' is inserted ~35 ms before
+   * the row goes; and deleting the client's router.refresh() as well changes nothing while this
+   * line is present, so the client refresh was never what removed the row.
+   *
+   * Dropping it costs nothing: every route here is dynamic (each reads the session cookie), so
+   * RemoveButton's router.refresh() re-renders this screen with the committed write already
+   * visible, and navigating to the home list fetches it fresh for the same reason (AC-4). The
+   * removal is in the database either way — that is what the revalidation was redundant with.
+   */
   return { ok: true, groupId };
 }

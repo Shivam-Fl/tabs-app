@@ -119,15 +119,13 @@ export function RemoveButton({
    * the document by the time this runs, and `router.refresh()` is an asynchronous round trip that
    * cannot resolve before it. It mirrors ArchiveButton — the same once-guarded effect.
    *
-   * Necessary, and NOT sufficient, and this is worth writing down rather than leaving the next
-   * reader to rediscover it. Measured on a production build with a MutationObserver over the
-   * members page, deleting `router.refresh()` from this component entirely still removes the row
-   * and still never inserts the role=status paragraph. The row goes because `removeMember`'s own
-   * `revalidatePath('/', 'layout')` ships the re-rendered members page back WITH the action
-   * result, and React commits that in the same commit as the ok state — unmounting this control
-   * before its confirmation can ever be a node. What makes the confirmation observable is
-   * dropping that revalidation, which is a change to src/app/actions/members.ts, not to this file.
-   * See the implementer note on issue #20.
+   * Ordering is only half of it, and the other half is upstream of this file: nothing here is
+   * readable if `removeMember` revalidates as well. Measured on a production build, with the
+   * action's `revalidatePath('/', 'layout')` still in place, the re-rendered members page — the
+   * removed row already gone, this control unmounted with it — ships back in the SAME commit as
+   * the ok state, and the status never becomes a node however this effect is written. That is
+   * why `removeMember` is the one action that does not revalidate, and why this screen's own
+   * refresh is what re-renders the list.
    */
   useEffect(() => {
     // Once: the result object is what this reacts to, and it stays the same across renders.

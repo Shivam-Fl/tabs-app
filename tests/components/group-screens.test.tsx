@@ -223,10 +223,10 @@ describe('the members screen', () => {
     // before the round trip is asked for, whereas refreshing from the wrapped action's awaited
     // continuation asks for it before useActionState has committed anything.
     //
-    // It is not the whole of AC-6, and this test cannot be read as if it were: what actually
-    // keeps the role=status node from ever existing is the Server Action's own revalidated
-    // response arriving in the same commit as the ok state, which unmounts this control. That is
-    // only observable in a browser — see the implementer note on issue #20.
+    // The other half of AC-3 — that removeMember does not revalidate, so the commit this status
+    // is inserted in cannot be raced by a re-rendered list unmounting the control with it — is a
+    // Server Action property rather than a rendering one, and is pinned where it lives, in
+    // tests/integration/members.test.ts.
     const confirmedWhenRefreshed: (HTMLElement | null)[] = [];
     router.refresh.mockImplementation(() => {
       confirmedWhenRefreshed.push(screen.queryByText('Removed Sam.'));
