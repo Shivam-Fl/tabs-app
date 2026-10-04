@@ -405,19 +405,24 @@
       "at": "2026-10-03T15:44:21.180Z",
       "agent": "implementer",
       "action": "lock released"
+    },
+    {
+      "at": "2026-10-04T14:20:08.823Z",
+      "agent": "router",
+      "action": "route plan -> implement -> review -> qa (model, confidence 90)"
     }
   ],
   "resume_at": null,
   "flow_plan": {
     "kind": "bug",
-    "confidence": 85,
+    "confidence": 90,
     "matched_rule": null,
     "gates": {},
     "councils": {
       "plan": "council",
       "review": "council"
     },
-    "decided_at": "2026-10-02T16:22:55.340Z"
+    "decided_at": "2026-10-04T14:20:08.823Z"
   },
   "stopped_at": null,
   "dispatched_stage": "implement",
