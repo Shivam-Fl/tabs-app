@@ -129,6 +129,21 @@
     "context": {
       "run_url": "https://github.com/Shivam-Fl/tabs-app/actions/runs/37208465645",
       "prior_signatures": []
+    },
+    "triage": {
+      "verdict": "wait",
+      "diagnosis": "The plan job's model endpoint went down mid-council. Every council session calls ANTHROPIC_BASE_URL=http://127.0.0.1:4000 — the local LiteLLM translator that .sdlc/bin/provider-settings.mjs starts via .sdlc/bin/model-bridge.mjs for the bridged model (provider.openai_models: muse-spark-1.3-contributor). That translator served its last request at 14:33:19, while Council 2/3 was still running, and then shut down; from that moment every model call in the job was refused. So the critic (49 turns, $2.02) ended without its structured_output, the arbiter made no model call at all (num_turns 1, cost 0, empty modelUsage) and its resume failed the same way, and nothing wrote work-order.json. The red step — 'Check that \"Council 3/3 — arbitrate\" returned its result' — is bookkeeping three steps downstream of the cause, not the cause. Nothing about the code, the plan or the issue is wrong: the proposer completed 125 turns at 14:30:16 and wrote a full 22-field plan/proposal.json. The trigger of the shutdown is not determinable from the log — it is a graceful stop with no traceback and no request after 14:33:19 — so this is a service outage, not a code, plan or repository defect. What survived (plan/proposal.json and plan/brief.md, kept in this run's plan-output artifact, id 11306157340) cannot be resumed: the plan job only ever downloads plan-inputs (sdlc-plan.yml:177-178) and plan-strategy.mjs's resume paths key on ledger.approved_work_order / validated_work_order, both null on state/36.json, so any re-entry of plan runs the council again — a resume would post 'resuming, not redoing' while redoing all of it. This is the outage class: the same shape (a died model run on the plan stage, error_type agent-runtime) hit #4 and #5 and the failure handler's cooldown carried both to done, while prior_signatures for #36 is empty. Park the plan stage for a cooldown — it backs off and a person hears about it if it outlasts four.",
+      "evidence": "failed-run.log, 'What the translator saw' tail (litellm.log lines 200-207): '14:33:19 ... \"POST /v1/messages?beta=true HTTP/1.1\" 200 OK' then 'INFO: Shutting down / INFO: Waiting for application shutdown. / INFO: Application shutdown complete. / INFO: Finished server process [2550]' — no request served after. plan/transcript-summary.json in artifact plan-output (id 11306157340): {\"result\":{\"subtype\":\"success\",\"is_error\":true,\"num_turns\":1},\"reply\":\"API Error: Connection refused — a firewall or proxy may be blocking it (ConnectionRefused)\"}. Council 3/3 result block: num_turns 1, total_cost_usd 0, modelUsage {}; _finish/plan_arbiter.md is 132 bytes. Council 2/3: num_turns 49, $2.0162, then '--json-schema was provided but Claude did not return structured_output'. Council 1/3 propose: success at 14:30:16, num_turns 125, $7.72, 'Set structured_output with 22 field(s)'. state/36.json: attempts.plan 3, work_order null, no approved_work_order/validated_work_order, prior_signatures []. state/4.json and state/5.json: plan agent-runtime failures, both later 'done'."
     }
-  }
+  },
+  "triage_history": [
+    {
+      "at": "2026-10-04T14:57:09.066Z",
+      "stage": "plan",
+      "verdict": "wait",
+      "confidence": 72,
+      "diagnosis": "The plan job's model endpoint went down mid-council. Every council session calls ANTHROPIC_BASE_URL=http://127.0.0.1:4000 — the local LiteLLM translator that .sdlc/bin/provider-settings.mjs starts via .sdlc/bin/model-bridge.mjs for the bridged model (provider.openai_models: muse-spark-1.3-contributor). That translator served its last request at 14:33:19, while Council 2/3 was still running, and then shut down; from that moment every model call in the job was refused. So the critic (49 turns, $2.",
+      "run": "37208465645"
+    }
+  ]
 }
