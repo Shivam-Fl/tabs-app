@@ -425,7 +425,7 @@
     "decided_at": "2026-10-04T14:20:08.823Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "implement",
+  "dispatched_stage": "plan",
   "validated_from": "root-cause",
   "validated_at": "2026-10-03T15:11:24.703Z",
   "validated_ac_changes": [
