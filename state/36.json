@@ -145,5 +145,8 @@
       "diagnosis": "The plan job's model endpoint went down mid-council. Every council session calls ANTHROPIC_BASE_URL=http://127.0.0.1:4000 — the local LiteLLM translator that .sdlc/bin/provider-settings.mjs starts via .sdlc/bin/model-bridge.mjs for the bridged model (provider.openai_models: muse-spark-1.3-contributor). That translator served its last request at 14:33:19, while Council 2/3 was still running, and then shut down; from that moment every model call in the job was refused. So the critic (49 turns, $2.",
       "run": "37208465645"
     }
-  ]
+  ],
+  "retry_after": "2026-10-04T15:17:10.133Z",
+  "retry_stage": "plan",
+  "parked_at": "2026-10-04T14:57:10.410Z"
 }
