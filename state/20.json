@@ -407,7 +407,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": "implement",
+  "resume_at": null,
   "flow_plan": {
     "kind": "bug",
     "confidence": 85,
@@ -419,7 +419,7 @@
     },
     "decided_at": "2026-10-02T16:22:55.340Z"
   },
-  "stopped_at": "implement",
+  "stopped_at": null,
   "dispatched_stage": "implement",
   "validated_from": "root-cause",
   "validated_at": "2026-10-03T15:11:24.703Z",
@@ -548,6 +548,15 @@
     {
       "id": "BUG-2",
       "title": "Removal confirmation only sometimes reaches the DOM before the refresh unmounts the row"
+    }
+  ],
+  "replan_requested_at": "2026-10-04T14:12:26.208Z",
+  "route_notes": [
+    {
+      "by": "Shivam-Fl",
+      "at": "2026-10-04T14:12:26.208Z",
+      "kind": "replan",
+      "note": "Adopt the implementer's variant B for BUG-2. Remove revalidatePath('/', 'layout') from removeMember in src/app/actions/members.ts, add that file to files[], and keep the router.refresh() in the effect that runs on the committed ok state. Keep the BUG-1 fix (unique Field ids) and the carried AC-1/AC-2 fixes as they are. removeMember is deliberately the only action in that file that does not revalidate: every route is dynamic, so the refresh refetches the members screen. Add a criterion that after removing a member, navigating to the home list shows current data, and check whether any other control that unmounts on success has the same ordering bug."
     }
   ]
 }
