@@ -100,7 +100,7 @@
       "action": "lock released"
     }
   ],
-  "resume_at": null,
+  "resume_at": "plan",
   "flow_plan": {
     "kind": "bug",
     "confidence": 88,
@@ -109,7 +109,7 @@
     "councils": {},
     "decided_at": "2026-10-04T13:46:16.694Z"
   },
-  "stopped_at": null,
+  "stopped_at": "plan",
   "dispatched_stage": "plan",
   "validated_from": "plan",
   "validated_at": "2026-10-04T14:09:54.798Z",
