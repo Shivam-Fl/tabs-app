@@ -1,7 +1,7 @@
 {
   "issue": 20,
   "pr": 21,
-  "state": "review",
+  "state": "implementing",
   "owner": null,
   "lock_expires": null,
   "lock_run": null,
@@ -222,7 +222,7 @@
   "review_history": [],
   "review_root_caused": [],
   "created_at": "2026-10-02T16:08:01.477Z",
-  "updated_at": "2026-10-04T15:34:59.425Z",
+  "updated_at": "2026-10-04T15:35:19.309Z",
   "history": [
     {
       "at": "2026-10-02T16:08:22.323Z",
@@ -573,6 +573,11 @@
       "at": "2026-10-04T15:34:59.425Z",
       "agent": "gate",
       "action": "-> review"
+    },
+    {
+      "at": "2026-10-04T15:35:19.309Z",
+      "agent": "sync",
+      "action": "-> implementing"
     }
   ],
   "resume_at": null,
