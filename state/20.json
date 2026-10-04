@@ -193,10 +193,12 @@
     "src/lib/access.ts",
     "src/components/ui/field.tsx",
     "src/components/member-actions.tsx",
+    "src/app/actions/members.ts",
     "src/components/rename-group-form.tsx",
-    "tests/components/group-screens.test.tsx",
+    "tests/lib/money.test.ts",
+    "tests/integration/members.test.ts",
     "tests/components/member-actions.test.tsx",
-    "tests/components/ui.test.tsx"
+    "tests/components/group-screens.test.tsx"
   ],
   "acceptance": [],
   "planned_route": [
