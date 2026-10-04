@@ -254,11 +254,53 @@ export const expenseSplitInput = pgTable(
 );
 
 /**
+ * A recorded settlement: the money one member actually handed another. TR-7's first-class record
+ * and the second half of the ledger a balance is summed from — a payment moves both balances by
+ * its amount, so it is written here rather than derived from the transfer list, which is an
+ * answer about stored rows and never a row itself.
+ *
+ * There is no currency column. A payment settles a debt the group recorded in the group's own
+ * currency, and that currency is fixed when the group is created, so a copy here could only
+ * disagree with it.
+ */
+export const payments = pgTable(
+  'payments',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    groupId: uuid('group_id')
+      .notNull()
+      .references(() => groups.id, { onDelete: 'cascade' }),
+    // Membership rows rather than users, like every other member reference in the ledger: a
+    // placeholder can be paid, and a departed member's rows keep their names (TR-16).
+    fromMemberId: uuid('from_member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    toMemberId: uuid('to_member_id')
+      .notNull()
+      .references(() => members.id, { onDelete: 'cascade' }),
+    amountMinor: bigint('amount_minor', { mode: 'bigint' }).notNull(),
+    note: text('note'),
+    // Who recorded it. Nullable for the reason an expense's created_by is: a person can be
+    // deleted while their group's history stays.
+    recordedBy: uuid('recorded_by').references(() => users.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // Deleting a payment sets this rather than removing the row: the payment.recorded entry that
+    // named it outlives it, and every read of a balance or a list filters on this column.
+    deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  },
+  (table) => [
+    // The list's own order, newest first, with created_at leading the group's payments into an
+    // index scan rather than a sort of every payment the group has ever had.
+    index('payments_group_created_idx').on(table.groupId, table.createdAt.desc()),
+  ],
+);
+
+/**
  * What an activity entry is about, for the entries that name a subject rather than a membership.
  * A union rather than a free string so a new subject has to be named here — and so the row a
  * reader cannot interpret is a compile error rather than a null.
  */
-export const activitySubjectTypes = ['expense'] as const;
+export const activitySubjectTypes = ['expense', 'payment'] as const;
 
 export type ActivitySubjectType = (typeof activitySubjectTypes)[number];
 
@@ -283,6 +325,14 @@ export type ActivitySubjectType = (typeof activitySubjectTypes)[number];
  * `expense.deleted` carries the expense as it was — description, amountMinor, currency — because
  * the entry outlives the thing it names: the parent row is soft-deleted and every read filters
  * it out, so the feed could not otherwise say what was removed.
+ *
+ * `payment.recorded` and `payment.deleted` carry the payment both ways round — who paid whom and
+ * how much — in one shape, because a deleted payment is soft-deleted exactly as an expense is and
+ * the entry is the only thing left that can say what it moved:
+ *
+ *   { fromMemberId, toMemberId, amountMinor: '400', note }
+ *
+ * `amountMinor` is a STRING of minor units, again for the reason the `detail` column gives.
  */
 export const activityKinds = [
   'group.created',
@@ -298,6 +348,8 @@ export const activityKinds = [
   'expense.added',
   'expense.edited',
   'expense.deleted',
+  'payment.recorded',
+  'payment.deleted',
 ] as const;
 
 export type ActivityKind = (typeof activityKinds)[number];
@@ -318,8 +370,8 @@ export const activity = pgTable(
     kind: text('kind').$type<ActivityKind>().notNull(),
     /**
      * What the entry is about, for the kinds that name a subject rather than a membership: an
-     * expense today, a payment in piece 7. Both are null for the membership and lifecycle
-     * kinds, which name a member_id instead.
+     * expense, or a payment. Both are null for the membership and lifecycle kinds, which name a
+     * member_id instead.
      */
     subjectType: text('subject_type').$type<ActivitySubjectType>(),
     subjectId: uuid('subject_id'),
