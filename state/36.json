@@ -132,7 +132,7 @@
   "stopped_at": null,
   "dispatched_stage": "plan",
   "validated_from": "plan",
-  "validated_at": "2026-10-04T14:09:54.798Z",
+  "validated_at": "2026-10-04T15:27:30.967Z",
   "validated_ac_changes": [],
   "failure_packet": {
     "issue": 36,
@@ -165,5 +165,98 @@
       "diagnosis": "The plan job's model endpoint went down mid-council. Every council session calls ANTHROPIC_BASE_URL=http://127.0.0.1:4000 — the local LiteLLM translator that .sdlc/bin/provider-settings.mjs starts via .sdlc/bin/model-bridge.mjs for the bridged model (provider.openai_models: muse-spark-1.3-contributor). That translator served its last request at 14:33:19, while Council 2/3 was still running, and then shut down; from that moment every model call in the job was refused. So the critic (49 turns, $2.",
       "run": "37208465645"
     }
-  ]
+  ],
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Non-member hard GET /groups/<id> returns 404 with the unavailable screen and no group data",
+        "id": "AC-1"
+      },
+      {
+        "check": "Non-member hard GET /groups/<id>/balances returns 404 with no balance or transfer data",
+        "id": "AC-2"
+      },
+      {
+        "check": "Non-member hard GET /groups/<id>/members returns 404 with no token, member, or invite data",
+        "id": "AC-3"
+      },
+      {
+        "check": "Member hard GETs of all three routes return 200 with their normal screens",
+        "id": "AC-4"
+      },
+      {
+        "check": "Malformed uuid and nonexistent uuid hard GETs return 404 each, recorded as separate matrix rows",
+        "id": "AC-5"
+      },
+      {
+        "check": "The (app) not-found screen renders exactly one h1, a home link, inside main#main",
+        "id": "AC-6"
+      },
+      {
+        "check": "The not-found screen names no group, invite token, or member",
+        "id": "AC-7"
+      },
+      {
+        "check": "Signed-out hard GET of each of the three routes redirects to sign-in rather than rendering 404",
+        "id": "AC-8"
+      }
+    ],
+    "approach": "Repro-first fix in the subtree that actually renders. The implementer reproduces the hard-GET 200-vs-404 matrix against the production build before changing anything, keeping malformed-uuid and nonexistent-uuid as separate rows (pre-await vs post-await notFound). The app-side contract is already correct, so the fix is the minimal read-order or serving-path change within the three (app) pages that returns 404 with the existing (app) not-found body, skeletons, and signed-out redirect preserved. No new not-found file is created; if no page-local change flips the status, the run lands the integration tests only and reports the streaming evidence for the loading-boundary follow-up rather than shipping a speculative fix.",
+    "confidence": 55,
+    "confidence_rationale": "Tree facts are verified by direct reads (sole boundary, all notFound callers, loading placement above every failing route, test-mock blindness, existing app-side coverage), and the proposed root-boundary fix is refuted rather than merely doubted, so the order cannot ship the wrong file. What keeps the number at 55 is that the streaming-flush mechanism is coherent but unproven: only the runtime matrix settles whether a page-local change flips the statuses or the fix belongs to the loading-boundary follow-up. A higher score needs the reproduced matrix; a lower one would ignore the verified app-side contract.",
+    "debate_summary": "No finding was dismissed: all eight critique findings were re-checked against the tree and upheld. (1) Wrong diagnosis upheld — the (app) boundary exists and renders the exact body quoted in the issue, so the nearest-boundary rule means a root file can never render for /groups/*; the plan was rewritten around the serving-path/streaming hypothesis instead. (2) Unconditional speculative landing upheld — files[] no longer names the forbidden root file on an unverified mechanism. (3) Route request upheld as inert and harmful — verified the only readers take it from work-order.json, and with planned_route [debug,implement,review,qa] an insert_stage debug from plan is granted as a rewind that restarts planning at attempt 4 of 10; dropped entirely. (4) Debug-stage premise upheld as false — verified agentForIssue returns planner for this issue's sole sdlc:planning label and debug shares the plan workflow, so measurement is assigned to implement/QA runtime, not a debug stage. (5) Missing keys upheld — restored out_of_scope, qa_script, assumptions, unknowns, alternatives_considered, risks, residual_risks. (6) Tests prove nothing upheld — the component test for an unreached boundary is replaced with integration coverage of the reached notFound calls plus a plain statement that HTTP status is QA-only. (7) Half of TR-1 and AC-6 sourcing upheld — added the signed-out redirect criterion and split the no-oracle clause under TR-1, leaving AC-6 purely TR-24. (8) Untested side effects of the root file upheld — moot now that the file is gone. There were no binding decisions in plan/brief.md to dismiss anything against (Nothing recorded); the binding v3 rejection is enforced by this order, not contradicted.",
+    "evidence": [
+      "src/app/(app)/not-found.tsx:14 renders the exact body quoted in issue #36 ('This group isn't available.')",
+      "No src/app/not-found.tsx exists; (app)/not-found.tsx is the sole boundary, so group routes never resolve upward",
+      "notFound() callers: groups/[id]/page.tsx:28,32,37; balances/page.tsx:25,29,34; members/page.tsx:22,31; join/[token]/page.tsx:33,43",
+      "loading.tsx above every failing route: (app)/loading.tsx plus per-route balances/members/[id] loading files",
+      "balances/page.tsx:23-34 awaits requireUser, params, database, readGroup before the membership notFound — the flush window",
+      "tests/helpers/request.ts:24-26 mocks notFound as a throw: Vitest is blind to HTTP status",
+      "tests/integration/groups.test.ts:206-232 proves the app-side contract (stranger and malformed id reach notFound; signed-out redirects)",
+      "Issue #36: correct body at 200 on all three routes, no data leaked; suspected framework serving behavior"
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Reproduce the hard-GET status matrix on the production build first (malformed vs nonexistent as separate rows); then land the minimal read-order or serving-path change that returns 404 with the existing (app) not-found body, skeleton, and signed-out redirect preserved. If no page-local change flips the status, land no product change here and report the streaming evidence for the follow-up.",
+        "path": "src/app/(app)/groups/[id]/page.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Same repro-first rule: minimal change returning 404 for the stranger/malformed/nonexistent cases with body and redirect preserved; no new boundary files.",
+        "path": "src/app/(app)/groups/[id]/balances/page.tsx"
+      },
+      {
+        "action": "edit",
+        "change": "Same repro-first rule: minimal change returning 404 for the stranger/malformed/nonexistent cases with body and redirect preserved; no new boundary files.",
+        "path": "src/app/(app)/groups/[id]/members/page.tsx"
+      }
+    ],
+    "issue": 36,
+    "kind": "bug",
+    "mode": "committed",
+    "reproduced": false,
+    "residual_risks": [
+      "If the matrix shows even the pre-await malformed case at 200, the fix is the loading-boundary follow-up, and this ticket lands tests plus evidence only",
+      "CI cannot catch a status regression: any future loading or layout change can reintroduce the 200 silently; QA must re-assert statuses",
+      "Prefetch, HEAD, and Range behavior stays unpinned and could disagree with document GETs",
+      "Archived and removed-member variants share the path but have no criterion; QA may spot-check them"
+    ],
+    "root_cause": "App-side authorization verified correct: every guarded page calls notFound() for non-members and malformed ids, proven by existing integration tests. The HTTP status is lost on the serving path. Leading mechanism: an ancestor loading-boundary streaming flush commits 200 before the page's awaited notFound resolves (a boundary sits above every failing route, and the membership notFound follows database awaits). Refuted: a missing root boundary — the nearest (app) boundary exists and already renders the observed body, so a root file is never reached. Unverified at plan time; the hard-GET matrix, with malformed vs nonexistent kept separate, decides.",
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "balances page reaches notFound for a signed-in stranger",
+          "members page reaches notFound for a signed-in stranger",
+          "all three pages reach notFound for a malformed uuid",
+          "all three pages redirect signed-out requests to /sign-in",
+          "overview stranger/malformed coverage retained as-is"
+        ],
+        "path": "tests/integration/groups.test.ts"
+      }
+    ],
+    "understanding": "Issue #36: non-member hard GETs of /groups/<id>, /balances, and /members render the correct (app) not-found body at HTTP 200 instead of 404 (TR-1 status half). No data leaks; the app-side notFound contract is already covered by integration tests, so the defect is the serving-path status, and the proposed root-boundary fix is refuted by the nearest-boundary rule.",
+    "version": 5
+  }
 }
