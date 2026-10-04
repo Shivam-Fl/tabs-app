@@ -1,21 +1,21 @@
 # Roadmap
 
-Rebuilt 2026-10-03 from `maintainer/issues.json` (9 open, 0 untrusted), `maintainer/pulls.json` (3 open), `maintainer/closed.json` (11 closed recently). Previous survey's roadmap was `maintainer/roadmap.md`.
+Rebuilt 2026-10-04 from `maintainer/issues.json` (9 open, 0 untrusted), `maintainer/pulls.json` (3 open), `maintainer/closed.json` (11 closed recently). Previous survey's roadmap was `maintainer/roadmap.md`.
 
 ## Shipped
 
 What a person can do now that they could not before:
 
 - **Sign up, sign in, and stay signed in.** Email/password accounts with salted scrypt hashes, opaque httpOnly session cookies, server-side sign-out, rate-limited sign-in, a health endpoint backed by a real database query, and migrations applied on boot on either backend (PGlite locally, Neon with `DATABASE_URL`). (Closed #3, plus its follow-ups #17.)
-- **Create a group, see who is in it, and manage membership.** Name, currency, optional type, exactly one owner; owner-only rename, remove, and archive; leave and remove refused while a balance is non-zero; a user sees only groups they belong to. (Closed #4, plus its follow-ups #20-tracked review items still open.)
+- **Create a group, see who is in it, and manage membership.** Name, currency, optional type, exactly one owner; owner-only rename, remove, and archive; leave and remove refused while a balance is non-zero; a user sees only groups they belong to. (Closed #4.)
 - **Invite people by link, and record a name before they sign up.** Idempotent join links the owner can disable or rotate with immediate invalidation, plus placeholder members with an atomic claim so everything recorded against the name becomes the claimer's. (Closed #5, plus its follow-ups #23, #26.)
 - **Record an expense: who paid, and how it splits.** One payer or several with parts summing exactly to the total, all four split types with the remainder rule stated and asserted before commit, categories, integer-minor-unit money end to end. (Closed #6, plus its follow-ups #27, #30.)
 - **Edit or delete an expense, and say exactly what changed.** The edit form reopens from the stored split rule showing what was typed, the activity entry names each field that moved, and balances move by exactly the replacement difference in one transaction with the entry. (Closed #7, plus its follow-up #33.)
 
 ## In flight
 
-- **#8 See who owes whom, in as few payments as possible** — open PR #31 from `sdlc/issue-8`, labelled `sdlc:needs-human`. Read-only balances over stored payer/share rows, greedy largest-creditor simplified debts, home-screen across-group totals, settled-state wording, and the balance-guarded leave/remove rules. Head of the remaining chain: #9 is parked on it.
-- **#20 Follow-ups from #4: 5 from the review** — open PR #21 from `sdlc/issue-20`, labelled `sdlc:needs-human`. Five non-blocking review findings from PR #19 (sub-unit negative sign in `formatMinor`, `readMembers` two-step auth, RemoveButton and rename form missing `router.refresh()`, one unlisted file in the work order). Blocks nothing; its `formatMinor` item bites as soon as #8 renders real balances.
+- **#8 See who owes whom, in as few payments as possible** — open PR #31 from `sdlc/issue-8`, labelled `sdlc:needs-human`. Read-only balances over stored payer/share rows, greedy largest-creditor simplified debts, home-screen across-group totals, settled-state wording, and the balance-guarded leave/remove rules. Head of the remaining chain: #9 is parked on it. Awaiting human triage by label, not agent work.
+- **#20 Follow-ups from #4: 5 from the review** — open PR #21 from `sdlc/issue-20`, labelled `sdlc:needs-human`. Five non-blocking review findings from PR #19 (sub-unit negative sign in `formatMinor`, `readMembers` two-step auth, RemoveButton and rename form missing `router.refresh()`, one unlisted file in the work order). Blocks nothing; its `formatMinor` item bites as soon as #8 renders real balances. Awaiting human triage by label.
 - **Memory maintenance PR #35** (`memory/2026-10-03`) — not product work; the Librarian's nightly pass. No agent action.
 
 Everything else open is parked behind the chain, not stalled: #9 on #8; #10, #11, #12 on #9. #14 (Spec coverage) and #15 (pipeline self-fixes) are bookkeeping, not product work.
@@ -56,7 +56,7 @@ Dependency graph between its open children, so the next run does not re-derive i
 
 ### Spec coverage
 
-#14 reports 11 sections: 1 built, 7 in flight, 2 not started, 1 non-goal. Its per-section table still names closed #6/#7 as "in flight" — bookkeeping lag after this week's merges, not a defect to file. Substance: **every TR-1..TR-27 is claimed** by at least one open or recently closed child (#8 covers TR-6/8/9/13/16, #9 covers TR-7/17, #10 covers TR-18/19, #11 covers TR-26, #12 covers TR-22/25/27), and S-2..S-10 are each carried. **No uncovered spec remains**, so no Spec coverage issue is filed. When the last child of #1 closes, #1 closes with nothing dropped.
+#14 reports 11 sections: 1 built, 7 in flight, 2 not started, 1 non-goal. Substance: **every TR-1..TR-27 is claimed** by at least one open or recently closed child (#8 covers TR-6/8/9/13/16, #9 covers TR-7/17, #10 covers TR-18/19, #11 covers TR-26, #12 covers TR-22/25/27), and S-2..S-10 are each carried. **No uncovered spec remains**, so no Spec coverage issue is filed. When the last child of #1 closes, #1 closes with nothing dropped.
 
 ## Notes for the next run
 
