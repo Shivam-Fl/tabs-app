@@ -441,80 +441,9 @@
   },
   "stopped_at": null,
   "dispatched_stage": "plan",
-  "validated_from": "root-cause",
-  "validated_at": "2026-10-03T15:11:24.703Z",
-  "validated_ac_changes": [
-    {
-      "id": "AC-1",
-      "was": {
-        "check": "formatMinor renders sub-unit negatives with the locale minus sign (formatMinor(-5n,'EUR') === '-€0.05', and formatMinor(-5n,'BHD') carries the formatter minus and ends with '0.005') while every existing rendering is byte-identical",
-        "how_to_verify": "vitest run tests/lib/money.test.ts",
-        "id": "AC-1",
-        "source": "TR-23",
-        "verify": "test"
-      },
-      "now": {
-        "check": "formatMinor renders sub-unit negatives with the locale minus sign (formatMinor(-5n,'EUR') === '-€0.05', and formatMinor(-5n,'BHD') carries the formatter minus and ends with '0.005') while every existing rendering is byte-identical",
-        "id": "AC-1"
-      }
-    },
-    {
-      "id": "AC-2",
-      "was": {
-        "check": "readMembers returns null for a non-member and the owner-first active list for a member, with the membership authorisation carried inside the fetching query",
-        "how_to_verify": "vitest run tests/integration/groups.test.ts tests/integration/members.test.ts",
-        "id": "AC-2",
-        "source": "TR-1",
-        "verify": "test"
-      },
-      "now": {
-        "check": "readMembers returns null for a non-member and the owner-first active list for a member, with the membership authorisation carried inside the fetching query",
-        "id": "AC-2"
-      }
-    },
-    {
-      "id": "AC-3",
-      "was": {
-        "check": "After removing a member, the row disappears without a manual reload and an in-place 'Removed <name>.' confirmation is inserted in a live region and announced; the row's disappearance is the durable signal and no live Remove button remains",
-        "how_to_verify": "Seed, sign in as the owner, open the members page, remove a member, observe the row disappear with confirmation and no reload",
-        "id": "AC-3",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      "now": {
-        "check": "After removing a member, the row disappears without a manual reload and an in-place 'Removed <name>.' confirmation is inserted in a live region and announced; the row's disappearance is the durable signal and no live Remove button remains",
-        "id": "AC-3"
-      }
-    },
-    {
-      "id": "AC-4",
-      "was": {
-        "check": "After renaming a group, the members back-link and the group-name paragraph show the new name without a manual reload, alongside the 'Saved.' message",
-        "how_to_verify": "Seed, sign in as the owner, rename the group on the members page, observe the surrounding server-rendered name update with no reload",
-        "id": "AC-4",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      "now": {
-        "check": "After renaming a group, the members back-link and the group-name paragraph show the new name without a manual reload, alongside the 'Saved.' message",
-        "id": "AC-4"
-      }
-    },
-    {
-      "id": "AC-5",
-      "was": {
-        "check": "After navigating home following a rename, the home row shows the new name with no manual reload",
-        "how_to_verify": "Seed, sign in as the owner, rename the group on the members page, navigate home, observe the home row shows the new name with no reload",
-        "id": "AC-5",
-        "source": "TR-13",
-        "verify": "browser"
-      },
-      "now": {
-        "check": "After navigating home following a rename, the home row shows the new name with no manual reload",
-        "id": "AC-5"
-      }
-    }
-  ],
+  "validated_from": "plan",
+  "validated_at": "2026-10-04T14:30:49.324Z",
+  "validated_ac_changes": [],
   "approved_too_high": false,
   "work_order_version": 2,
   "work_order_posted_at": "2026-10-03T15:17:03.954Z",
@@ -578,5 +507,203 @@
       "kind": "replan",
       "note": "Adopt the implementer's variant B for BUG-2. Remove revalidatePath('/', 'layout') from removeMember in src/app/actions/members.ts, add that file to files[], and keep the router.refresh() in the effect that runs on the committed ok state. Keep the BUG-1 fix (unique Field ids) and the carried AC-1/AC-2 fixes as they are. removeMember is deliberately the only action in that file that does not revalidate: every route is dynamic, so the refresh refetches the members screen. Add a criterion that after removing a member, navigating to the home list shows current data, and check whether any other control that unmounts on success has the same ordering bug."
     }
-  ]
+  ],
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "Negative amounts smaller than one major unit render with the locale minus sign (formatMinor(-5n,'EUR') is '-€0.05').",
+        "how_to_verify": "Run the new unit cases in tests/lib/money.test.ts; CI runs vitest.",
+        "id": "AC-1",
+        "source": "TR-23",
+        "verify": "test"
+      },
+      {
+        "check": "A non-member reading a group gets null/no data from readMembers; the member-list read expresses the membership join inside the data query like readGroup does.",
+        "how_to_verify": "Run the integration cases asserting readMembers returns null for a stranger and rows for a member; review the query for the in-query membership predicate.",
+        "id": "AC-2",
+        "source": "TR-1",
+        "verify": "test"
+      },
+      {
+        "check": "After the owner removes a settled member, the members screen shows the removal (row gone plus in-place confirmation) with no manual reload.",
+        "how_to_verify": "Seed, sign in as owner, open a group members page, confirm Remove on a settled member: the row disappears and a confirmation shows without reloading (browser QA).",
+        "id": "AC-3",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "After removing a member, navigating to the home list shows current data (no stale group/member state).",
+        "how_to_verify": "After AC-3, navigate to / (home): the group's row/balances reflect the removal without a manual reload (browser QA).",
+        "id": "AC-4",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "After the owner renames a group, the h1, members back-link and home row show the new name with no manual reload.",
+        "how_to_verify": "Rename a group as owner and observe the members header, back-link, group-name paragraph and home list update after Saved. appears (browser QA).",
+        "id": "AC-5",
+        "source": "TR-13",
+        "verify": "browser"
+      },
+      {
+        "check": "The members screen has no duplicate control ids: the add-member and rename fields render distinct label/input/error associations.",
+        "how_to_verify": "Open the members screen as owner and assert no two elements share the same id (devtools/axe duplicate-id check) plus the new Field-id component cases pass.",
+        "id": "AC-6",
+        "source": "TR-24",
+        "verify": "browser"
+      },
+      {
+        "check": "No other control that unmounts on success loses its post-success navigation or refresh to the same ordering bug (audit Leave/Join/Delete/Archive/Claim/AddPlaceholder/Rename).",
+        "how_to_verify": "PR description lists each unmounting control, the mechanism it uses (continuation vs effect vs single-component reconcile), and the test or manual check proving its post-success action survives; reviewer confirms.",
+        "id": "AC-7",
+        "source": "TR-1",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Variant A: keep revalidatePath in removeMember and do the refresh/navigation in the awaited action continuation (the LeaveButton pattern).",
+        "rejected_because": "The binding route decision prescribes variant B, and the implementer's browser experiment proved the action-response re-render (driven by that revalidate) unmounts the row in the same commit, so no continuation- or effect-based refresh can insert the confirmation while the revalidate stays."
+      },
+      {
+        "approach": "Fix duplicate Field ids with an optional id-override prop plus distinct literal ids at the two colliding call sites.",
+        "rejected_because": "The binding decision keeps the BUG-1 fix (unique Field ids) as the implementer built and browser-verified it: per-instance useId. An override prop fixes today's two call sites but reintroduces the class the next time two same-named fields share a screen."
+      },
+      {
+        "approach": "Fix readMembers by only documenting why the two-step check-then-fetch is acceptable.",
+        "rejected_because": "The module docstring promises no function takes a group id and returns data without the join, and the EXISTS predicate is directly reusable in the fetch WHERE clause, so the join is expressible and the exception needs no carve-out."
+      }
+    ],
+    "approach": "Fix all five review findings per the binding route decision (implementer variant B for the remove ordering bug): carry the sign outside the whole part in formatMinor; express the member-list read as a membership join inside the fetching query; give Field per-instance unique ids via useId; convert RemoveButton to an effect on the committed ok state that renders the confirmation and calls router.refresh(), and remove revalidatePath('/', 'layout') from removeMember only (documented as the deliberate exception since every route is dynamic); add router.refresh() on rename success; audit every other control that unmounts on success for the same ordering bug.",
+    "assumptions": [
+      "Every route that renders group data is dynamic (verified: no generateStaticParams, force-static, or cached fetches under src/app; every page reads the session), so dropping the server revalidate in removeMember does not leave a statically cached page stale; AC-4 guards this behaviorally.",
+      "The duplicate-id collision is the members screen's two Field name=\"name\" instances (AddPlaceholderForm label Name + RenameGroupForm label Group name) sharing id field-name.",
+      "readMembers can reuse the existing memberOfGroup EXISTS predicate in the fetch WHERE clause without changing its null-for-non-member contract.",
+      "React useId ids are stable for the life of each Field mount, so label/error associations survive re-renders."
+    ],
+    "confidence": 82,
+    "confidence_rationale": "All five root causes were re-verified at their exact lines on main, the binding decision settles the one contested mechanism (variant B, proven by the implementer's 3x browser runs plus the decisive no-refresh control run), and I independently confirmed the every-route-is-dynamic premise the revalidate removal rests on. What would move the number up is QA confirming AC-3/AC-4/AC-6 in the browser; what would move it down is a Drizzle type rejection of the EXISTS predicate in the SELECT where clause or a currency whose minus layout is not a simple prefix.",
+    "debate_summary": "There was no proposal to judge (plan/proposal.json is empty), so per the arbiter rule I planned from plan/brief.md and the code, treating plan/critique.json as the de-facto plan under judgment. Accepted: the money sign-carry fix, the readMembers in-query join, RemoveButton's effect-on-committed-ok refresh, removing revalidatePath from removeMember only, the rename refresh effect, the home-freshness criterion (AC-4), and the unmounting-controls audit (AC-7). Dismissed three things: (1) the critique's optional id-override prop plus distinct literal ids at the two call sites — it contradicts the binding decision, which keeps the BUG-1 fix (unique Field ids) as the implementer built and browser-verified it (per-instance useId), and it fixes the instance while leaving the class; (2) the companion placeholder-actions.tsx / rename-group-form.tsx id-threading edits, which are consequences of (1) and unneeded under useId; (3) the archive-button.tsx files[] entry, which prescribes at most a clarifying comment — a no-op edit that forces implementer judgment, so the file is recorded in out_of_scope with its already-correct, already-tested behavior instead.",
+    "evidence": [
+      "src/lib/money.ts:49 whole is -(absolute/scale), so -5n gives whole 0n and -0n===0n, hence formatToParts(0n) emits no minus — the reported -5n->'€0.05' defect, verified by reading.",
+      "src/lib/access.ts:318-334 readActiveMemberRows gates on readMembership then fetches members+users filtered only by groupId — the only reader without the join in the data query; siblings use memberOfGroup at 355/365/563/640.",
+      "src/components/member-actions.tsx:99-101 RemoveButton passes an empty onSuccess and holds no router, unlike LeaveButton (continuation push, 58-60) and ArchiveButton (once-guarded effect refresh, archive-button.tsx:24-32).",
+      "src/app/actions/members.ts:380 removeMember calls revalidatePath('/', 'layout') like the other seven actions in the file; the implementer's browser experiment proved this revalidate delivers the row removal in the action-response commit, pre-empting any committed-state confirmation.",
+      "src/components/rename-group-form.tsx has no router and no refresh on state.ok, while renameGroup revalidates at src/app/actions/groups.ts:113 — the revalidate purges cache but does not re-render the current page.",
+      "src/components/ui/field.tsx:42 id is `field-${name}`; the members screen renders AddPlaceholderForm Field name=name (placeholder-actions.tsx:32) and RenameGroupForm Field name=name (rename-group-form.tsx:32) together — duplicate id field-name verified.",
+      "No generateStaticParams, force-static, or force-cache under src/app — every route reads the session, so all routes are dynamic and router.refresh() refetches after the removeMember revalidate is dropped."
+    ],
+    "files": [
+      {
+        "action": "edit",
+        "change": "Carry the sign outside the whole part: format the absolute whole through formatToParts with the fraction substituted as today, and when the input was negative prepend the minus-sign part read from the same pinned formatter (probe formatToParts of a negative value; fallback '-').",
+        "path": "src/lib/money.ts",
+        "why": "Root-cause fix for formatMinor dropping '-' when absolute<scale (TR-23)."
+      },
+      {
+        "action": "edit",
+        "change": "Constrain the member-list SELECT with the existing memberOfGroup(groupId, userId) EXISTS predicate inside the fetching query and return null on an empty result; update the doc comment to state the authorisation is inside the fetching query.",
+        "path": "src/lib/access.ts",
+        "why": "Makes readMembers honor the module's no-group-id-without-join invariant (TR-1)."
+      },
+      {
+        "action": "edit",
+        "change": "Generate the input id per Field instance with React useId (derive the error id from it) instead of id = field-${name}; keep label/error wiring otherwise identical.",
+        "path": "src/components/ui/field.tsx",
+        "why": "BUG-1 root cause: duplicate id field-name when two same-named fields share a screen; per the binding decision this is the implementer's verified fix, kept as-is."
+      },
+      {
+        "action": "edit",
+        "change": "Remove router.refresh() from the wrapped action's awaited continuation and refresh from a once-guarded (announced-ref) useEffect on the committed state.ok that first renders the 'Removed <name>.' role=status confirmation with the Remove button disabled, mirroring ArchiveButton.",
+        "path": "src/components/member-actions.tsx",
+        "why": "Variant B: with the server revalidate gone, the effect on committed state inserts the confirmation before the client refresh re-renders the list."
+      },
+      {
+        "action": "edit",
+        "change": "Remove the revalidatePath('/', 'layout') call from removeMember ONLY, with a comment that it is deliberately the one action in this file that does not revalidate because every route is dynamic and the client's router.refresh() refetches the members screen.",
+        "path": "src/app/actions/members.ts",
+        "why": "Variant B ordering fix per the binding decision: the action-response re-render otherwise unmounts the row in the same commit and the confirmation can never be inserted."
+      },
+      {
+        "action": "edit",
+        "change": "Add useRouter and a state.ok effect calling router.refresh() so the server-rendered name around the form re-renders; keep the Saved. message, the initialName sync effect and the invalid-field focus effect unchanged.",
+        "path": "src/components/rename-group-form.tsx",
+        "why": "Revalidate alone does not re-render the current page; the rename needs the client refresh once Field ids make the submit carry the typed value."
+      }
+    ],
+    "issue": 20,
+    "kind": "bug",
+    "mode": "committed",
+    "out_of_scope": [
+      "src/components/archive-button.tsx: no code change. The file's absence from a previous work order's files[] was a planning-process gap, not a product defect; the component already refreshes on success from a once-guarded committed-state effect, announces completion, and is covered by the existing archive component test.",
+      "src/components/settings-form.tsx: no code change here. The profile form has the same revalidate-without-refresh shape, but it is a sixth finding outside this issue's five and ships on its own as its own ticket."
+    ],
+    "qa_script": [
+      "Seed and sign in as owner; open a group members page.",
+      "Remove a settled member: confirm the row disappears with an in-place confirmation and no manual reload, and a second Remove cannot be submitted against the stale row.",
+      "Navigate to the home list: group rows/balances are current with no manual reload.",
+      "Rename the group: h1, members back-link, group-name paragraph and home row show the new name after Saved. with no reload.",
+      "As owner, inspect the members screen for duplicate ids (no two elements share id; label/error associations distinct).",
+      "Archive a group as owner: button shows Archived and the screen refreshes."
+    ],
+    "reproduced": true,
+    "residual_risks": [
+      "RemoveButton confirmation is transient by design: the refreshed list unmounts the row, so a screen reader that has not yet announced the inserted status loses it; the row's disappearance is the durable signal.",
+      "Remove and rename refresh only the current tab; a stale row in another tab still submits and surfaces the action's formError.",
+      "If the post-remove client refresh itself fails, the 'Removed <name>.' status shows while the stale row remains with its button disabled and no retry; a manual reload recovers."
+    ],
+    "risks": [
+      "Removing the removeMember revalidate relies on every route being dynamic; verified structurally (no static markers under src/app) with the home-freshness criterion (AC-4) as the behavioral guard.",
+      "The readMembers rewrite reuses the memberOfGroup SQL predicate in a SELECT where clause; if the Drizzle union Session type rejects it there, fall back to an aliased self-join and keep the single-round-trip property.",
+      "RenameGroupForm's refresh delivers a new initialName through the existing sync effect, which overwrites in-progress typing raced between submit and refresh landing; the success path (typed name equals new name) is unaffected."
+    ],
+    "tests": [
+      {
+        "action": "edit",
+        "cases": [
+          "formatMinor(-5n,'EUR')==='-€0.05' (plus -1n/-99n sub-unit cases; existing -1234n/-100n cases keep passing)"
+        ],
+        "path": "tests/lib/money.test.ts"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "RemoveButton resolving ok inserts the status and refreshes exactly once from the committed ok state",
+          "RemoveButton never-resolving action asserts no status and no refresh while pending",
+          "leave still navigates home from the continuation after unmount (existing case, unchanged)"
+        ],
+        "path": "tests/components/member-actions.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "two same-named Fields on one screen render distinct ids and each label targets its own input"
+        ],
+        "path": "tests/components/ui.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "MembersScreen renders two name inputs with distinct ids and getByLabel('Group name') resolves to the rename input",
+          "RemoveButton deferred action asserts no refresh while pending — refresh fires only from committed ok state",
+          "RenameGroupForm ok asserts router.refresh alongside 'Saved.'"
+        ],
+        "path": "tests/components/group-screens.test.tsx"
+      },
+      {
+        "action": "edit",
+        "cases": [
+          "readMembers returns null for a non-member and rows for a member (join expressed in-query)",
+          "rename as owner updates the name read back through readGroup; non-owner rename still refused"
+        ],
+        "path": "tests/integration/members.test.ts"
+      }
+    ],
+    "understanding": "Issue #20 carries five unfixed review findings from PR #19 (for #4): (1) formatMinor drops '-' for sub-one-unit negatives, (2) readMembers authorises via a separate check-then-fetch instead of an in-query membership join, (3) RemoveButton shows nothing on success until reload, (4) rename shows Saved. while server-rendered names stay stale until reload, plus the duplicate-Field-id root cause behind the rename submit carrying the initial value and the remove ordering bug behind the missing confirmation. The binding route decision adopts variant B (drop revalidatePath from removeMember, refresh from the committed ok-state effect), keeps the unique-Field-ids and AC-1/AC-2 fixes, and requires a home-list-freshness criterion plus an audit of other unmounting controls.",
+    "unknowns": [
+      "Whether any supported currency's en-US formatToParts places the minus other than as a simple prefix; mitigated by reading the minus part from the formatter rather than hardcoding position.",
+      "Whether the readMembers join rewrite affects member ordering or placeholder-name coalescing in any edge case current tests do not pin."
+    ],
+    "version": 3
+  }
 }
