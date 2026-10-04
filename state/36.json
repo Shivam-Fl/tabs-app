@@ -66,5 +66,153 @@
     "decided_at": "2026-10-04T13:46:16.694Z"
   },
   "stopped_at": null,
-  "dispatched_stage": "debug"
+  "dispatched_stage": "debug",
+  "validated_work_order": {
+    "acceptance": [
+      {
+        "check": "As a signed-in non-member, a hard document GET of /groups/<id> answers HTTP 404, renders the 'This group isn't available.' screen, and exposes no group data (no name, no balances, no members).",
+        "how_to_verify": "QA boots the production build, seeds, creates a group as user A, signs in as fresh user B, and hard-loads the URL (address bar / curl, not client navigation); assert status 404 and body without group data, then reload once and assert the status is stable.",
+        "id": "AC-1",
+        "source": "TR-1",
+        "verify": "browser"
+      },
+      {
+        "check": "As a signed-in non-member, a hard document GET of /groups/<id>/balances answers HTTP 404 with the unavailable screen and no group data.",
+        "how_to_verify": "Same QA session as AC-1: hard-load /groups/<id>/balances as user B; assert status 404 and no data leak, then reload once.",
+        "id": "AC-2",
+        "source": "TR-1",
+        "verify": "browser"
+      },
+      {
+        "check": "As a signed-in non-member, a hard document GET of /groups/<id>/members answers HTTP 404 with the unavailable screen and no group data (in particular, no invite token and no member names).",
+        "how_to_verify": "Same QA session: hard-load /groups/<id>/members as user B; assert status 404 and no invite/member data, then reload once.",
+        "id": "AC-3",
+        "source": "TR-1",
+        "verify": "browser"
+      },
+      {
+        "check": "As a group member, hard GETs of the overview, balances, and members routes still answer HTTP 200 and render their normal screens (the fix changes no authorised path).",
+        "how_to_verify": "Same QA session: hard-load all three routes as user A; assert status 200 and the normal screens.",
+        "id": "AC-4",
+        "source": "TR-1",
+        "verify": "browser"
+      },
+      {
+        "check": "A malformed id (/groups/not-a-uuid) and a valid-but-nonexistent uuid each answer HTTP 404 on hard GET, proving the matrix separates a parse-time 404 from a read-time 404.",
+        "how_to_verify": "As user A, hard-load both URLs; assert 404 on each with the unavailable screen.",
+        "id": "AC-5",
+        "source": "TR-1",
+        "verify": "browser"
+      },
+      {
+        "check": "If the root boundary lands, it renders exactly one h1 with the generic unavailable message inside <main id=\"main\">, plus a working link home, and names nothing (no group name, no token, no membership hint). This criterion proves markup only, never status.",
+        "how_to_verify": "Component test tests/components/not-found.test.tsx renders the boundary and asserts one h1, the message, the home link, the main#main landmark, and the absence of group content.",
+        "id": "AC-6",
+        "source": "TR-24",
+        "verify": "test"
+      }
+    ],
+    "alternatives_considered": [
+      {
+        "approach": "Delete src/app/(app)/not-found.tsx and serve every notFound() from a single root boundary.",
+        "rejected_because": "Bigger blast radius and likely no fix: group pages lose their tailored 'This group isn't available.' message (breaking AC-1/AC-2/AC-3), bad invite-link and unknown-URL 404s would inherit group-specific copy ('you may not be a member of it') that misleads outside a group context, and if the 200 comes from streaming committing early, consolidation fails for the same reason."
+      },
+      {
+        "approach": "Add middleware.ts (or a Route Handler wrapper) that rewrites or forces the status code for these paths.",
+        "rejected_because": "A new runtime surface for what a framework boundary already expresses; it needs a hand-maintained path list that rots with every new route, and the repo's conventions favour the framework idiom (notFound() plus boundary) every guarded page already relies on."
+      },
+      {
+        "approach": "Redirect non-members to a static 404 page instead of calling notFound().",
+        "rejected_because": "A redirect turns the contract into 302-then-200, which is still not a 404 and adds a timing/existence oracle; TR-1's contract is 'a non-member receives 404', and notFound() is how every guarded page already asks for it."
+      }
+    ],
+    "approach": "Reproduce first, then let measurement decide the fix — do not assume the missing root boundary is the cure. Boot the production build (npm run sdlc:serve), seed, create a group as user A, and hard-GET (address bar / curl, never client navigation) /groups/<id>, /groups/<id>/balances and /groups/<id>/members as signed-in non-member B, plus a malformed uuid and a valid-but-nonexistent uuid as A, recording HTTP statuses before any code change. If no HTTP 200 reproduces, stop with no code change per the issue's own instruction. If the 200 reproduces, the leading hypothesis to test (from debug) is streaming: a loading.tsx Suspense boundary sits above every named route (src/app/(app)/loading.tsx and the per-segment loading files) and may flush the shell with status 200 before the page's notFound() throws — the nearest-boundary-wins rule means a new root boundary alone cannot change group-segment statuses, so the after-matrix decides. Create src/app/not-found.tsx with correct shell-less composition (own <main id=\"main\">, generic copy, theme tokens only, no session or database) and re-run the identical hard-GET matrix: land the file permanently only if group-segment statuses flip to 404 with the tailored group copy preserved; otherwise revert it before merge so join and unknown-URL bodies are untouched, and do the debug-directed streaming-or-guard fix as a follow-up instead of consolidating boundaries (consolidation breaks AC-1/AC-2/AC-3 and likely fails the same way). Member-200 and reload-stability checks from the qa_script run in both worlds.",
+    "assumptions": [
+      "QA's HTTP 200 was observed on hard document GETs (address-bar loads / curl), not on client-side navigations whose RSC flight responses are 200 by framework design; the qa_script pins hard loads so the verification checks the right thing.",
+      "HTTP status is not assertable in this repo's Vitest suites: tests/helpers/request.ts mocks notFound() as a NEXT_NOT_FOUND throw, so status is proven only by QA browser checks and structure by the component test, never by CI.",
+      "The (app) layout's requireUser() succeeds for signed-in B, so the 200 path reaches the page's notFound() rather than a sign-in redirect; signed-out behaviour (redirect to sign-in) is untouched by this change.",
+      "LOAD-BEARING AND UNVERIFIED from the planning environment (no runtime, no web access): Next 16.3.8's exact status-setting for nested vs root not-found boundaries and its interaction with loading.tsx streaming. The before/after hard-GET matrix in qa_script proves or refutes each candidate mechanism; nothing in this order asserts the internals as fact."
+    ],
+    "confidence": 55,
+    "confidence_rationale": "The reproduce-or-drop gate plus the before/after hard-GET matrix make the order safe to attempt: a non-reproducing bug lands nothing, and a root boundary that does not flip group-segment statuses is reverted rather than shipped. What keeps the number at 55 is that the actual fix is still contingent — the proposal's root-boundary mechanism is unproven and likely wrong under nearest-boundary-wins, while the leading streaming hypothesis (loading Suspense committing 200 early) is supported by files present above every named route but equally unproven without a runtime. Debug's live measurement moves this up (mechanism confirmed, fix targeted) or down (streaming fix required, which touches spec-mandated skeletons and outgrows this order).",
+    "debate_summary": "The critique is upheld in substance on every blocking and major finding, with one qualification about certainty. (1) Root-cause mechanism: UPHELD — the proposal's claim that the framework serves 404 status from the root boundary while the (app)-scoped boundary renders the body at 200 is unverified and contradicts nearest-boundary-wins; a root boundary alone should not change group-segment statuses, so the order is rewritten as measurement-gated instead of asserting the cure. (2) Streaming hypothesis: UPHELD as the leading candidate but DEMOTED from asserted fact — loading.tsx boundaries are verified present above every named route, which the proposal never mentions, but presence is not proof that the shell commits 200 before notFound() throws; debug must confirm it at runtime, and the order names it as the hypothesis to test rather than the established cause. (3) Consolidation fallback: UPHELD as rejected — it likely fails for the same streaming reason if that hypothesis holds, and it certainly breaks AC-1/AC-2/AC-3 by replacing tailored copy with generic copy, reversing the proposal's own rejected alternative; the order forbids it and reverts instead. (4) Shell/landmark composition: UPHELD — (app)/not-found.tsx renders inside the (app) layout's Shell (which owns <main id=\"main\">), so the proposal's claim that it proves shell-less composition is false; any root boundary must supply its own <main id=\"main\"> like sign-in, sign-up and join do, and the order requires it. (5) CI-blind acceptance: UPHELD — no Vitest criterion can fail on this bug (status lives outside the mocked notFound throw), so all status criteria are verify:browser and the component test explicitly proves markup only. (6) Caller inventory: UPHELD — 6 notFound() page files sit under groups/[id]/ (overview, balances, members, expenses list, expenses/new, expenses/[expenseId]/edit); the 7th caller is join/[token]/page.tsx, outside the route group. (7) qa_script mislabel: UPHELD — /join/<bad-token> shares no boundary with the group routes (join sits outside (app) by design) and is treated as the control measurement, not as family swept for free. (8) Debug-stage scope: UPHELD in spirit — the binding route is debug→implement→review→qa and the mechanism question belongs to debug; this order does not pre-empt it but gates the implement change on the measurement debug produces, with an explicit revert rule. No finding was dismissed outright; the only thing set aside is the critique's certainty about the streaming mechanism, which is as unverified at plan time as the proposal's boundary theory.",
+    "evidence": [
+      "src/app/(app)/not-found.tsx renders the tailored 'This group isn't available.' body and is the sole boundary under (app); no src/app/not-found.tsx exists.",
+      "6 notFound() page files under src/app/(app)/groups/[id]/ (overview, balances, members, expenses list, expenses/new, expenses/[expenseId]/edit) plus src/app/join/[token]/page.tsx outside the group — grep over src/app confirms; proposal's '7 under groups/[id]' is wrong.",
+      "loading.tsx Suspense boundaries verified above every named route: src/app/(app)/loading.tsx, groups/[id]/loading.tsx, balances/loading.tsx, members/loading.tsx, expenses/loading.tsx, expenses/new/loading.tsx, expenses/[expenseId]/edit/loading.tsx.",
+      "src/app/(app)/layout.tsx wraps children in Shell (requireUser then Shell); src/components/shell.tsx owns <main id=\"main\"> — so (app)/not-found.tsx inherits the landmark and a root boundary would not.",
+      "src/app/layout.tsx is the bare document (skip link to #main plus children); shell-less pages that supply their own landmark: sign-in, sign-up, join/[token]/page.tsx (each renders <main id=\"main\">).",
+      "src/app/join/[token]/page.tsx header comment states it sits OUTSIDE the (app) route group so signed-out visitors keep their destination — shares no not-found ancestry with group routes.",
+      "tests/helpers/request.ts mocks next/navigation notFound() as throwing NEXT_NOT_FOUND — Vitest can assert the throw, never the HTTP status.",
+      "Issue #36 body: QA observed HTTP 200 with the correct not-found body on direct GET of all three group routes as signed-in non-member (no data leak), suspected serving-path cause, reproducibility always, explicit instruction to drop what does not reproduce."
+    ],
+    "files": [
+      {
+        "action": "create",
+        "change": "Create src/app/not-found.tsx (GATED — land permanently only if the hard-GET after-matrix flips group-segment statuses to 404 with group copy preserved, else revert before merge): a root 404 boundary with generic copy ('This page isn't available.') plus one sentence naming nothing (no group name, no token, no membership hint), a LinkButton home to /, theme tokens only, no session access, no database, no metadata export, wrapped in its own <main id=\"main\"> landmark (the root layout supplies no Shell). Group pages keep src/app/(app)/not-found.tsx untouched.",
+        "path": "src/app/not-found.tsx",
+        "why": "If measurement shows a root boundary is what flips the status, this is the branded fallback for boundary-less segments with composition that satisfies the skip-link landmark; if measurement shows it changes nothing for group segments, it is reverted so join and unknown-URL bodies are not churned for a fix that never worked."
+      }
+    ],
+    "issue": 36,
+    "kind": "bug",
+    "mode": "committed",
+    "out_of_scope": [
+      "No IAC list exists on issue #36, so every criterion traces to a TR requirement instead; nothing is deferred to an IAC-n.",
+      "Signed-out behaviour is untouched: unauthenticated requests still redirect to sign-in, they do not 404.",
+      "Client-side navigations (Link/router) still resolve at HTTP 200 at the fetch layer with the not-found UI rendered client-side; only hard document GETs carry the 404 status. That is framework behaviour and is not changed by this ticket.",
+      "No change to the authorisation queries in src/lib/access.ts: no data leaks today (verified by QA), and this ticket changes only which boundary frames the denial and with what status, not the denial itself.",
+      "No loading.tsx skeleton is removed or restructured in this order: the skeletons are spec-mandated (docs/ui.md loading states per screen). If debug confirms streaming commits the 200, the streaming fix is a follow-up that weighs that cost explicitly, not a silent deletion here.",
+      "/join/<bad-token> and unknown URLs are control measurements only; their bodies change only if the root boundary lands permanently, otherwise they are untouched."
+    ],
+    "qa_script": [
+      "Boot the production build (npm run sdlc:serve) and seed (npm run sdlc:seed); record the pre-change matrix before touching any file.",
+      "Sign up as user A, create a group, note its id; note one valid-but-nonexistent uuid as well.",
+      "In a fresh context sign up as user B (never invited, never joined).",
+      "As B, hard-load (address bar or curl, never in-app Link) /groups/<id> — record status and body; expect 404 with 'This group isn't available.' and no group name anywhere.",
+      "As B, hard-load /groups/<id>/balances and /groups/<id>/members — expect 404 each, with no balances, member names, or invite token in the bodies.",
+      "As A, hard-load /groups/not-a-uuid (malformed, parse-time 404) and the valid-but-nonexistent uuid (read-time 404) — expect 404 on each; the two cases must be recorded separately.",
+      "As A (member), hard-load the overview, balances, and members routes — expect 200 and the normal screens (no authorised-path regression).",
+      "Controls (outside the (app) boundary family, not swept for free): as A hard-load /join/does-not-resolve and, signed out, /no-such-page-xyz — record status and body before and after any change.",
+      "Reload every URL above once more and assert the status is stable across reload; if the 200 does not reproduce at step 4 on current main, stop with no code change per the issue.",
+      "After any code change, re-run steps 4-8 identically; land src/app/not-found.tsx only if group-segment statuses flip to 404 with group copy intact, else revert it and file the debug-directed streaming-or-guard fix as the follow-up."
+    ],
+    "reproduced": false,
+    "residual_risks": [
+      "If the root boundary does not flip group-segment statuses, the real fix (streaming/guard placement) is still open and may touch spec-mandated loading skeletons — QA should probe skeleton behaviour on every group route after the follow-up.",
+      "Nothing in CI can detect a return to HTTP 200 (Vitest mocks notFound as a throw), so the bug can regress silently after the fix; every future QA pass over group routes should re-assert hard-GET statuses.",
+      "HEAD, Range, and prefetch requests are unpinned: only hard document GETs are asserted, so an intended 200 at another layer is indistinguishable from a regression there.",
+      "The valid-but-nonexistent uuid vs malformed uuid split is asserted only by QA browser checks, not by any automated test."
+    ],
+    "risks": [
+      "If adding the root boundary does not change group-segment statuses (nearest-boundary-wins served with 200 regardless, e.g. streaming commits early), the file is reverted and the streaming-or-guard fix becomes a follow-up — the qa_script's before/after matrix decides this, not further theory.",
+      "Landing the root boundary permanently changes the 404 body for invite-link and unknown-URL routes from Next's default to the branded page (status stays 404); intended only if it also fixes the group routes, otherwise reverted.",
+      "If the 200 does not reproduce on current main at all, this whole order is void — per the issue, drop it rather than landing a boundary for a bug that was never there.",
+      "Removing or restructuring any loading.tsx to fix streaming would delete spec-mandated skeletons; that trade is explicitly out of this order and belongs to the follow-up."
+    ],
+    "root_cause": "Suspected framework serving-path behaviour, mechanism unverified at plan time: direct hard GETs of guarded group routes as a signed-in non-member render the correct (app)-scoped not-found body with HTTP 200 instead of 404. The proposal's theory (only a root boundary carries the 404 status) contradicts nearest-boundary-wins and is unproven; the leading alternative is that a loading.tsx Suspense boundary above every named route streams the shell and commits status 200 before the page's notFound() throws — supported by files present, unproven without a runtime. The order gates the fix on live before/after measurement rather than asserting either theory.",
+    "tests": [
+      {
+        "action": "create",
+        "cases": [
+          "renders exactly one h1 with the generic unavailable message",
+          "renders a link home pointing at /",
+          "renders inside a <main id=\"main\"> landmark (skip-link target the root layout provides but does not fill)",
+          "renders no group name, token, or member content (nothing to leak at the boundary)"
+        ],
+        "path": "tests/components/not-found.test.tsx"
+      }
+    ],
+    "understanding": "Issue #36 (follow-up from #8 / PR #31): direct hard GETs of guarded group routes (/groups/<id>, /groups/<id>/balances, /groups/<id>/members) as a signed-in non-member render the correct not-found body ('This group isn't available.') but with HTTP 200 instead of the 404 that TR-1's notFound() contract requires. No data leaks (QA verified); only the status is wrong. All 6 guarded pages under src/app/(app)/groups/[id]/ call notFound() on non-membership or malformed uuid, served today by the sole route-group-scoped src/app/(app)/not-found.tsx — there is no root src/app/not-found.tsx, and a loading.tsx Suspense boundary sits above every named route. The mechanism that turns the correct body into a 200 is unverified: the proposal's root-boundary theory and the critique's streaming theory are both unproven without a runtime, so the fix must be measurement-gated, never assumed.",
+    "unknowns": [
+      "Whether the 200 still reproduces on current main — a later round may have fixed it, in which case the ticket is dropped with no code change.",
+      "Whether adding the root boundary flips group-segment hard-GET statuses to 404 (proposal's theory) or changes nothing for them (nearest-boundary-wins plus streaming) — decided by the qa_script after-measurement, with revert if no flip.",
+      "Next 16.3.8's exact status-setting internals for nested vs root not-found boundaries and their interaction with loading.tsx streaming (no runtime or web access from the planning environment).",
+      "If streaming is the cause, what the minimal fix is that preserves the spec-mandated skeletons — explicitly a follow-up, not prescribed here."
+    ],
+    "version": 1
+  },
+  "validated_from": "plan",
+  "validated_at": "2026-10-04T13:57:39.938Z",
+  "validated_ac_changes": []
 }
