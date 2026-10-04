@@ -58,7 +58,7 @@ describe('the overview’s empty-state strings', () => {
   });
 
   it('renders the empty-activity sentence with the EM DASH at offset 17', () => {
-    render(<GroupOverview group={group} members={[member]} entries={[]} />);
+    render(<GroupOverview group={group} members={[member]} transfers={[]} entries={[]} />);
 
     const rendered = screen.getByText(/^Nothing here yet/).textContent ?? '';
     expect(rendered).toBe(EMPTY_ACTIVITY);
@@ -69,7 +69,7 @@ describe('the overview’s empty-state strings', () => {
   });
 
   it('renders the settled sentence with the ASCII apostrophe U+0027', () => {
-    render(<GroupOverview group={group} members={[member]} entries={[]} />);
+    render(<GroupOverview group={group} members={[member]} transfers={[]} entries={[]} />);
 
     const rendered = screen.getByText(/square in this group/).textContent ?? '';
     expect(rendered).toBe(SETTLED);
@@ -93,7 +93,7 @@ describe('the overview’s empty-state strings', () => {
     const renamed: ActivityRow = { ...entry, id: 'a-2', kind: 'group.renamed' };
     const archived: ActivityRow = { ...entry, id: 'a-3', kind: 'group.archived' };
 
-    render(<GroupOverview group={group} members={[member]} entries={[renamed, archived]} />);
+    render(<GroupOverview group={group} members={[member]} transfers={[]} entries={[renamed, archived]} />);
 
     expect(screen.getByText(/renamed the group/)).toBeInTheDocument();
     expect(screen.getByText(/archived the group/)).toBeInTheDocument();
@@ -101,11 +101,11 @@ describe('the overview’s empty-state strings', () => {
   });
 
   it('shows the empty block only while there is nothing to show', () => {
-    const { unmount } = render(<GroupOverview group={group} members={[member]} entries={[]} />);
+    const { unmount } = render(<GroupOverview group={group} members={[member]} transfers={[]} entries={[]} />);
     expect(screen.getByText(/^Nothing here yet/)).toBeInTheDocument();
     unmount();
 
-    render(<GroupOverview group={group} members={[member]} entries={[entry]} />);
+    render(<GroupOverview group={group} members={[member]} transfers={[]} entries={[entry]} />);
     expect(screen.queryByText(/^Nothing here yet/)).not.toBeInTheDocument();
     expect(screen.getByText(/joined the group/)).toBeInTheDocument();
   });

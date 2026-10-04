@@ -7,6 +7,7 @@ import { GroupList } from '@/components/group-list';
 import { GroupOverview } from '@/components/group-overview';
 import { MembersScreen } from '@/components/members-screen';
 import type { ActivityRow, GroupRow, GroupSummary, InviteRow, MemberRow, Membership } from '@/lib/access';
+import { SETTLE_FIRST_MESSAGE, type HomeSummaryTotals, type Transfer } from '@/lib/balances';
 
 // MembersScreen renders the leave and remove controls, and the owner section renders the rename
 // form and the archive control — all of which import Server Actions, which import the database.
@@ -71,36 +72,84 @@ const entry: ActivityRow = {
 
 const summaries: GroupSummary[] = [{ id: group.id, name: 'Lisbon', type: 'trip', currency: 'EUR', balanceMinor: 0n }];
 
+/** The props the home list needs beyond the groups themselves. */
+const noSummary = { summary: null, summaryCurrency: 'EUR', failedGroupIds: [] as string[] };
+
+const transfer: Transfer = { fromMemberId: other.memberId, toMemberId: owner.memberId, amountMinor: 1250n };
+
 function h1s(container: HTMLElement): Element[] {
   return [...container.querySelectorAll('h1')];
 }
 
 describe('the group overview', () => {
   it('has exactly one h1 and shows the name, type and currency', () => {
-    const { container } = render(<GroupOverview group={group} members={[owner]} entries={[]} />);
+    const { container } = render(
+      <GroupOverview group={group} members={[owner]} transfers={[]} entries={[]} />,
+    );
 
     expect(h1s(container)).toHaveLength(1);
     expect(h1s(container)[0]?.textContent).toBe('Lisbon');
     expect(screen.getByText('trip · EUR')).toBeInTheDocument();
   });
 
-  it('renders every member at a formatted zero, in the group’s currency', () => {
-    render(<GroupOverview group={group} members={[owner, other]} entries={[entry]} />);
+  it('renders every member at their real balance, in the group’s currency', () => {
+    const owed: MemberRow = { ...owner, balanceMinor: 1250n };
+    const owing: MemberRow = { ...other, balanceMinor: -600n };
+    render(<GroupOverview group={group} members={[owed, owing]} transfers={[]} entries={[entry]} />);
 
-    // The symbol form, per TR-23: '€0.00' and not 'EUR 0.00'.
-    expect(screen.getAllByText(/€0\.00/)).toHaveLength(2);
-    // And the direction is in words, so the amount survives a screen reader and a colour-blind
-    // reader: neither member is owed anything, and the primitive says so.
-    expect(screen.getAllByText('settled:')).toHaveLength(2);
+    // The symbol form, per TR-23: '€12.50' and not 'EUR 12.50'.
+    expect(screen.getByText(/€12\.50/)).toBeInTheDocument();
+    expect(screen.getByText(/-€6\.00/)).toBeInTheDocument();
+  });
+
+  it('states each direction in visible words, not in colour alone', () => {
+    const owed: MemberRow = { ...owner, balanceMinor: 1250n };
+    const owing: MemberRow = { ...other, balanceMinor: -600n };
+    const square: MemberRow = { ...other, memberId: 'm-square', displayName: 'Ana', balanceMinor: 0n };
+
+    const { unmount } = render(
+      <GroupOverview group={group} members={[owed, square]} transfers={[]} entries={[]} />,
+    );
+    // The regression this pins: the primitive rendered the direction sr-only, so a sighted
+    // reader had the colour and nothing else — the one signal TR-23 forbids relying on.
+    expect(screen.getByText('is owed')).toBeInTheDocument();
+    expect(screen.getByText('settled')).toBeInTheDocument();
+    // Third person on a row labelled with somebody else's name: a table of every member saying
+    // "you" is a table nobody can read.
+    expect(screen.queryByText('you are owed')).not.toBeInTheDocument();
+    unmount();
+
+    render(<GroupOverview group={group} members={[owing]} transfers={[]} entries={[]} />);
+    expect(screen.getByText('owes')).toBeInTheDocument();
+  });
+
+  it('lists the transfers it is handed, and says the group is square when there are none', () => {
+    const { unmount } = render(
+      <GroupOverview group={group} members={[owner, other]} transfers={[]} entries={[]} />,
+    );
+    expect(screen.getByText(/Everyone.s square in this group\./)).toBeInTheDocument();
+    unmount();
+
+    render(<GroupOverview group={group} members={[owner, other]} transfers={[transfer]} entries={[]} />);
+    expect(screen.getByText('Sam pays Priya')).toBeInTheDocument();
+    expect(screen.getByText(/€12\.50/)).toBeInTheDocument();
+    expect(screen.queryByText(/Everyone.s square in this group\./)).not.toBeInTheDocument();
   });
 
   it('renders the archived notice for an archived group', () => {
-    const { unmount } = render(<GroupOverview group={group} members={[owner]} entries={[]} />);
+    const { unmount } = render(
+      <GroupOverview group={group} members={[owner]} transfers={[]} entries={[]} />,
+    );
     expect(screen.queryByText('This group is archived.')).not.toBeInTheDocument();
     unmount();
 
     render(
-      <GroupOverview group={{ ...group, archivedAt: new Date('2026-02-01T00:00:00.000Z') }} members={[owner]} entries={[]} />,
+      <GroupOverview
+        group={{ ...group, archivedAt: new Date('2026-02-01T00:00:00.000Z') }}
+        members={[owner]}
+        transfers={[]}
+        entries={[]}
+      />,
     );
     expect(screen.getByText('This group is archived.')).toBeInTheDocument();
   });
@@ -178,6 +227,27 @@ describe('the members screen', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('withholds Leave and Remove from a member whose balance is not zero, and says why', () => {
+    const owing: MemberRow = { ...other, balanceMinor: -600n };
+    const { unmount } = render(
+      <MembersScreen group={group} members={[owner, owing]} viewer={ownerView} invite={invite} />,
+    );
+    // The owner's Remove is gone from Sam's row, and the sentence standing where it was is the
+    // one the action returns if the write is attempted anyway — a row that hid the control and
+    // said nothing would read as a bug.
+    expect(screen.queryByRole('button', { name: 'Remove' })).not.toBeInTheDocument();
+    expect(screen.getByText(SETTLE_FIRST_MESSAGE)).toBeInTheDocument();
+    // The owner's own row is untouched: no control on it is gated by a balance.
+    expect(screen.getByRole('button', { name: 'Archive Lisbon' })).toBeInTheDocument();
+    unmount();
+
+    render(
+      <MembersScreen group={group} members={[owner, owing]} viewer={memberView} invite={invite} />,
+    );
+    expect(screen.queryByRole('button', { name: 'Leave' })).not.toBeInTheDocument();
+    expect(screen.getByText(SETTLE_FIRST_MESSAGE)).toBeInTheDocument();
+  });
+
   it('confirms a leave in a dialog that names the group', () => {
     render(<MembersScreen group={group} members={[owner, other]} viewer={memberView} invite={invite} />);
 
@@ -192,34 +262,89 @@ describe('the members screen', () => {
 describe('the home list', () => {
   it('has exactly one h1 when empty and exactly one h1 when not', () => {
     const empty = render(
-      <GroupList groups={[]} leftGroupId={null} leftGroupName={null} />,
+      <GroupList groups={[]} {...noSummary} leftGroupId={null} leftGroupName={null} />,
     );
     expect(h1s(empty.container)).toHaveLength(1);
     expect(h1s(empty.container)[0]?.textContent).toBe("You're not in any groups yet.");
     empty.unmount();
 
     const listed = render(
-      <GroupList groups={summaries} leftGroupId={null} leftGroupName={null} />,
+      <GroupList groups={summaries} {...noSummary} leftGroupId={null} leftGroupName={null} />,
     );
     expect(h1s(listed.container)).toHaveLength(1);
     expect(h1s(listed.container)[0]?.textContent).toBe('Your groups');
   });
 
-  it('renders a row per group with its type and the viewer’s balance, and Create group', () => {
-    render(<GroupList groups={summaries} leftGroupId={null} leftGroupName={null} />);
+  it('renders a row per group with its type and the viewer’s own balance, and Create group', () => {
+    const owed: GroupSummary[] = [{ ...summaries[0], balanceMinor: 1250n }];
+    render(<GroupList groups={owed} {...noSummary} leftGroupId={null} leftGroupName={null} />);
 
     expect(screen.getByRole('link', { name: /Lisbon/ })).toHaveAttribute('href', `/groups/${group.id}`);
     expect(screen.getByText('trip')).toBeInTheDocument();
-    expect(screen.getByText(/€0\.00/)).toBeInTheDocument();
+    // The caller's own figure, so it reads in the second person rather than as a third-person
+    // row among others.
+    expect(screen.getByText('you are owed')).toBeInTheDocument();
+    expect(screen.getByText(/€12\.50/)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Create group' })).toHaveAttribute('href', '/groups/new');
   });
 
+  it('renders the two totals with their per-person lines, at the headline size', () => {
+    const totals: HomeSummaryTotals = {
+      owedMinor: 1250n,
+      oweMinor: 600n,
+      owedBy: [{ memberId: other.memberId, displayName: 'Sam', amountMinor: 1250n }],
+      oweTo: [{ memberId: owner.memberId, displayName: 'Priya', amountMinor: 600n }],
+    };
+    render(
+      <GroupList
+        groups={summaries}
+        summary={totals}
+        summaryCurrency="EUR"
+        failedGroupIds={[]}
+        leftGroupId={null}
+        leftGroupName={null}
+      />,
+    );
+
+    // The two --text-2xl figures, each with its direction as the label above it rather than as
+    // colour on the number.
+    const owed = screen.getByText('you are owed').parentElement as HTMLElement;
+    const owe = screen.getByText('you owe').parentElement as HTMLElement;
+    expect(owed.querySelector('.text-xl')).toHaveTextContent('€12.50');
+    expect(owe.querySelector('.text-xl')).toHaveTextContent('€6.00');
+    // The breakdown, directly beneath each figure, named per person.
+    expect(screen.getByText('Sam')).toBeInTheDocument();
+    expect(screen.getByText('Priya')).toBeInTheDocument();
+  });
+
+  it('withholds the totals and shows one inline error when a group fails to load', () => {
+    const totals: HomeSummaryTotals = { owedMinor: 1250n, oweMinor: 0n, owedBy: [], oweTo: [] };
+    render(
+      <GroupList
+        groups={summaries}
+        summary={totals}
+        summaryCurrency="EUR"
+        failedGroupIds={[group.id]}
+        leftGroupId={null}
+        leftGroupName={null}
+      />,
+    );
+
+    // The row keeps its name and loses its link, and offers the one action the pattern allows.
+    expect(screen.getByText('Lisbon')).toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: /Lisbon/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent("Couldn't load this group's balances.");
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+
   it('shows the leave notice only for a name the server resolved', () => {
-    const { unmount } = render(<GroupList groups={summaries} leftGroupId={group.id} leftGroupName={null} />);
+    const { unmount } = render(
+      <GroupList groups={summaries} {...noSummary} leftGroupId={group.id} leftGroupName={null} />,
+    );
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
     unmount();
 
-    render(<GroupList groups={summaries} leftGroupId={group.id} leftGroupName="Lisbon" />);
+    render(<GroupList groups={summaries} {...noSummary} leftGroupId={group.id} leftGroupName="Lisbon" />);
     expect(screen.getByText('You left Lisbon · Undo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
   });
@@ -229,7 +354,9 @@ describe('the home list', () => {
     // so the list is empty and the home screen renders HomeEmpty. The notice has to survive that
     // branch: it is the only Undo affordance for the leave, and leaving it to the list branch
     // hides it for exactly the person the notice was written for.
-    const { container } = render(<GroupList groups={[]} leftGroupId={group.id} leftGroupName="Lisbon" />);
+    const { container } = render(
+      <GroupList groups={[]} {...noSummary} leftGroupId={group.id} leftGroupName="Lisbon" />,
+    );
 
     expect(screen.getByText('You left Lisbon · Undo')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();

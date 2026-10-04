@@ -12,6 +12,7 @@ import {
   mergeClaimPlaceholder,
   readLastMembershipActivity,
   readMembership,
+  readNetBalanceForMember,
   readRemovedMembership,
   removeMemberAsOwner,
   resolveGroupByToken,
@@ -20,6 +21,7 @@ import {
   setInviteEnabledAsOwner,
   type ClaimRefusal,
 } from '@/lib/access';
+import { SETTLE_FIRST_MESSAGE } from '@/lib/balances';
 import { requireUser } from '@/lib/auth';
 
 /**
@@ -283,6 +285,13 @@ export async function leaveGroup(_previous: MemberResult | null, formData: FormD
     // the slot. The screen offers them archive or a transfer that does not exist yet instead.
     if (membership.isOwner) return 'owner' as const;
 
+    // TR-13's balance precondition, read INSIDE the transaction that would end the membership:
+    // a balance read before it could be settled between the two requests. Nothing has been
+    // written at this point, so a refusal here leaves the group exactly as it was.
+    const balance = await readNetBalanceForMember(tx, groupId, membership.memberId, user.id);
+    if (balance === null) return false;
+    if (balance !== 0n) return 'not-settled' as const;
+
     if (!(await endMembership(tx, membership.memberId, user.id))) return false;
 
     // The row stays with removed_at set; the entry is what authorises Undo and what the home
@@ -294,6 +303,7 @@ export async function leaveGroup(_previous: MemberResult | null, formData: FormD
   if (left === 'owner') {
     return { ok: false, formError: "You own this group, so you can't leave it. Archive it instead." };
   }
+  if (left === 'not-settled') return { ok: false, formError: SETTLE_FIRST_MESSAGE };
   if (!left) return { ok: false, formError: 'You are not a member of this group.' };
 
   revalidatePath('/', 'layout');
@@ -352,12 +362,19 @@ export async function removeMember(_previous: MemberResult | null, formData: For
     const membership = await readMembership(tx, groupId, user.id);
     if (!membership?.isOwner) return false;
 
+    // The same TR-13 precondition as leaving, and the same sentence for it: a member with a
+    // balance is refused by both paths, and the two must not explain the rule differently.
+    const balance = await readNetBalanceForMember(tx, groupId, memberId, user.id);
+    if (balance === null) return false;
+    if (balance !== 0n) return 'not-settled' as const;
+
     if (!(await removeMemberAsOwner(tx, groupId, memberId, membership))) return false;
 
     await recordActivity(tx, { groupId, actorId: user.id, kind: 'member.removed', memberId });
     return true;
   });
 
+  if (removed === 'not-settled') return { ok: false, formError: SETTLE_FIRST_MESSAGE };
   if (!removed) return { ok: false, formError: 'That member could not be removed.' };
 
   revalidatePath('/', 'layout');
